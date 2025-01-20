@@ -24,7 +24,9 @@
 #include "scripting/flash/ui/ContextMenuItem.h"
 #include "scripting/flash/ui/ContextMenuBuiltInItems.h"
 #include "scripting/flash/ui/gameinput.h"
+#include "scripting/flash/display/RootMovieClip.h"
 
+#include "scripting/toplevel/Global.h"
 #include "scripting/class.h"
 #include "scripting/abc.h"
 using namespace lightspark;
@@ -43,7 +45,8 @@ void ABCVm::registerClassesFlashUI(Global* builtin)
 	builtin->registerBuiltin("Multitouch","flash.ui",Class<Multitouch>::getRef(m_sys));
 	builtin->registerBuiltin("MultitouchInputMode","flash.ui",Class<MultitouchInputMode>::getRef(m_sys));
 
-	if(m_sys->flashMode==SystemState::AIR)
+	// contrary to specs the GameInput classes are _not_ AIR only but available for every swf file with version >= 20
+	if(m_sys->flashMode==SystemState::AIR || m_sys->mainClip->applicationDomain->version>=20)
 	{
 		builtin->registerBuiltin("GameInput","flash.ui",Class<GameInput>::getRef(m_sys));
 		builtin->registerBuiltin("GameInputDevice","flash.ui",Class<GameInputDevice>::getRef(m_sys));

@@ -24,8 +24,13 @@
 #include <string>
 #include <sstream>
 #include "scripting/class.h"
+#include "scripting/toplevel/toplevel.h"
+#include "scripting/toplevel/Global.h"
+#include "scripting/toplevel/Namespace.h"
 #include "scripting/toplevel/Number.h"
+#include "scripting/toplevel/Undefined.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/display/RootMovieClip.h"
 
 using namespace std;
 using namespace lightspark;
@@ -39,7 +44,7 @@ struct OpcodeData
 		double doubles[0];
 		ASObject* objs[0];
 		multiname* names[0];
-		const Type* types[0];
+		Type* types[0];
 	};
 };
 
@@ -563,70 +568,70 @@ ASObject* ABCVm::executeFunctionFast(const SyntheticFunction* function, call_con
 			{
 				//li8
 				LOG_CALL( "li8");
-				ApplicationDomain::loadIntN<uint8_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::loadIntN<uint8_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x36:
 			{
 				//li16
 				LOG_CALL( "li16");
-				ApplicationDomain::loadIntN<uint16_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::loadIntN<uint16_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x37:
 			{
 				//li32
 				LOG_CALL( "li32");
-				ApplicationDomain::loadIntN<uint32_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::loadIntN<uint32_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x38:
 			{
 				//lf32
 				LOG_CALL( "lf32");
-				ApplicationDomain::loadFloat(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::loadFloat(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x39:
 			{
 				//lf32
 				LOG_CALL( "lf64");
-				ApplicationDomain::loadDouble(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::loadDouble(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x3a:
 			{
 				//si8
 				LOG_CALL( "si8");
-				ApplicationDomain::storeIntN<uint8_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::storeIntN<uint8_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x3b:
 			{
 				//si16
 				LOG_CALL( "si16");
-				ApplicationDomain::storeIntN<uint16_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::storeIntN<uint16_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x3c:
 			{
 				//si32
 				LOG_CALL( "si32");
-				ApplicationDomain::storeIntN<uint32_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::storeIntN<uint32_t>(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x3d:
 			{
 				//sf32
 				LOG_CALL( "sf32");
-				ApplicationDomain::storeFloat(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::storeFloat(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x3e:
 			{
 				//sf32
 				LOG_CALL( "sf64");
-				ApplicationDomain::storeDouble(context->mi->context->root->applicationDomain.getPtr(), context);
+				ApplicationDomain::storeDouble(context->mi->context->applicationDomain, context);
 				break;
 			}
 			case 0x40:
@@ -1144,7 +1149,7 @@ ASObject* ABCVm::executeFunctionFast(const SyntheticFunction* function, call_con
 				//coerce
 				multiname* name=data->names[0];
 				char* rewriteableCode = &(mi->body->code[0]);
-				const Type* type = Type::getTypeFromMultiname(name, context->mi->context);
+				Type* type = Type::getTypeFromMultiname(name, context->mi->context);
 				OpcodeData* rewritableData=reinterpret_cast<OpcodeData*>(rewriteableCode+instructionPointer);
 				//Rewrite this to a coerceEarly
 				rewriteableCode[instructionPointer-1]=0xfc;
@@ -1664,7 +1669,7 @@ ASObject* ABCVm::executeFunctionFast(const SyntheticFunction* function, call_con
 			case 0xfc:
 			{
 				//coerceearly
-				const Type* type = data->types[0];
+				Type* type = data->types[0];
 				LOG_CALL("coerceEarly " << type);
 
 				RUNTIME_STACK_POP_CREATE(context,o);

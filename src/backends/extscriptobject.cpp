@@ -28,10 +28,13 @@
 #include "scripting/toplevel/Array.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Number.h"
+#include "scripting/toplevel/Null.h"
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
+#include "scripting/toplevel/Undefined.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "parsing/tags.h"
 
 #include "backends/extscriptobject.h"
 
@@ -302,7 +305,7 @@ ASObject* ExtVariant::getASObject(ASWorker *wrk, std::map<const lightspark::ExtO
 			// We are converting an object, so lets set variables
 			else
 			{
-				asobj = Class<ASObject>::getInstanceS(wrk);
+				asobj = new_asobject(wrk);
 				objectsMap[objValue] = asobj;
 			
 				ExtIdentifier** ids;

@@ -2,6 +2,7 @@
     Lighspark, a free flash player implementation
 
     Copyright (C) 2016 Ludger Krämer <dbluelle@onlinehome.de>
+    Copyright (C) 2024  mr b0nk 500 <b0nk@b0nk.xyz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -29,11 +30,14 @@
 #include "backends/security.h"
 #include "backends/rendering.h"
 #include "backends/audio.h"
+#include "backends/decoder.h"
 #include "scripting/flash/utils/ByteArray.h"
 #include "scripting/flash/display/NativeMenuItem.h"
+#include "scripting/flash/display/LoaderInfo.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include <string>
 #include <algorithm>
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include "threading.h"
 #include "plugin_ppapi/plugin.h"
 #include "plugin_ppapi/ppextscriptobject.h"
@@ -813,6 +817,7 @@ ppPluginInstance::ppPluginInstance(PP_Instance instance, int16_t argc, const cha
 	m_graphics(0),
 	m_cachefilesystem(0),
 	m_cachedirectory_ref(0),
+	eventLoop(new Time(), this),
 	mainDownloaderStreambuf(nullptr),mainDownloaderStream(nullptr),
 	mainDownloader(nullptr),
 	m_pt(nullptr),
@@ -820,6 +825,8 @@ ppPluginInstance::ppPluginInstance(PP_Instance instance, int16_t argc, const cha
 	m_extargc(0),
 	m_extargv(nullptr),
 	m_extexception(nullptr),
+	mousepos({0, 0}),
+	modifiers(LSModifier::None),
 	inReading(false),
 	inWriting(false)
 {
@@ -833,7 +840,14 @@ ppPluginInstance::ppPluginInstance(PP_Instance instance, int16_t argc, const cha
 	m_graphics = 0;
 	setTLSSys( nullptr );
 	setTLSWorker(nullptr);
-	m_sys=new lightspark::SystemState(0, lightspark::SystemState::FLASH);
+	// TODO: Add a PPAPI logging implementation, that can print to the
+	// JavaScript console.
+	m_sys=new lightspark::SystemState
+	(
+		0,
+		lightspark::SystemState::FLASH,
+		&eventLoop
+	);
 	//Files running in the plugin have REMOTE sandbox
 	m_sys->securityManager->setSandboxType(lightspark::SecurityManager::REMOTE);
 
@@ -873,8 +887,12 @@ ppPluginInstance::ppPluginInstance(PP_Instance instance, int16_t argc, const cha
 		m_sys->downloadManager=new ppDownloadManager(this);
 	
 		//EngineData::startSDLMain();
-		EngineData::mainthread_running = true;
-		mainDownloader=new ppDownloader(swffile,m_sys->mainClip->loaderInfo.getPtr(),this);
+		// NOTE: `mainthread_running` has to be `false`, because
+		// `SystemState` would otherwise try to delete the event loop
+		// upon destruction, but in this case, the event loop is inside
+		// `ppPluginInstance`.
+		EngineData::mainthread_running = false;
+		mainDownloader=new ppDownloader(swffile,m_sys->mainClip->loaderInfo,this);
 		// loader is notified through parsethread
 		mainDownloader->getCache()->setNotifyLoader(false);
 	}
@@ -983,252 +1001,318 @@ void ppPluginInstance::handleResize(PP_Resource view)
 		m_last_size.height = position.size.height;
 	}
 }
-typedef struct {
+struct ppKeyMap
+{
 	const char* ppkey;
-	SDL_Keycode sdlkeycode;
-} ppKeyMap;
+	AS3KeyCode keyCode;
+};
 
 // the ppkey values are taken from https://www.w3.org/TR/uievents-key/
-ppKeyMap ppkeymap[] = {
-	{ "KeyA", SDLK_a },
-	{ "AltLeft", SDLK_LALT },
-	{ "KeyB", SDLK_b },
-	{ "BrowserBack", SDLK_AC_BACK },
-	{ "Backquote", SDLK_BACKQUOTE },
-	{ "Backslash", SDLK_BACKSLASH },
-	{ "Backspace", SDLK_BACKSPACE },
-//	{ "Blue", SDLK_UNKNOWN }, // TODO
-	{ "KeyC", SDLK_c },
-	{ "CapsLock", SDLK_CAPSLOCK },
-	{ "Comma", SDLK_COMMA },
-	{ "ControlLeft", SDLK_LCTRL },
-	{ "ControlRight", SDLK_RCTRL },
-	{ "KeyD", SDLK_d },
-	{ "Delete", SDLK_DELETE },
-	{ "ArrowDown", SDLK_DOWN },
-	{ "KeyE", SDLK_e },
-	{ "End", SDLK_END },
-	{ "Enter", SDLK_RETURN },
-	{ "Equal", SDLK_EQUALS },
-	{ "Escape", SDLK_ESCAPE },
-	{ "KeyF", SDLK_f },
-	{ "F1", SDLK_F1 },
-	{ "F2", SDLK_F2 },
-	{ "F3", SDLK_F3 },
-	{ "F4", SDLK_F4 },
-	{ "F5", SDLK_F5 },
-	{ "F6", SDLK_F6 },
-	{ "F7", SDLK_F7 },
-	{ "F8", SDLK_F8 },
-	{ "F9", SDLK_F9 },
-	{ "F10", SDLK_F10 },
-	{ "F11", SDLK_F11 },
-	{ "F12", SDLK_F12 },
-//	{ "F13", SDLK_F13 },// TODO
-//	{ "F14", SDLK_F14 },// TODO
-//	{ "F15", SDLK_F15 },// TODO
-	{ "KeyG", SDLK_g },
-//	{ "Green", SDLK_UNKNOWN }, // TODO
-	{ "KeyH", SDLK_h },
-	{ "Help", SDLK_HELP },
-	{ "Home", SDLK_HOME },
-	{ "KeyI", SDLK_i },
-	{ "Insert", SDLK_INSERT },
-	{ "KeyJ", SDLK_j },
-	{ "KeyK", SDLK_k },
-	{ "KeyL", SDLK_l },
-	{ "ArrowLeft", SDLK_LEFT },
-	{ "BracketLeft", SDLK_LEFTBRACKET },
-	{ "KeyM", SDLK_m },
-	{ "Minus", SDLK_MINUS },
-	{ "KeyN", SDLK_n },
-	{ "Digit0", SDLK_0 },
-	{ "Digit1", SDLK_1 },
-	{ "Digit2", SDLK_2 },
-	{ "Digit3", SDLK_3 },
-	{ "Digit4", SDLK_4 },
-	{ "Digit5", SDLK_5 },
-	{ "Digit6", SDLK_6 },
-	{ "Digit7", SDLK_7 },
-	{ "Digit8", SDLK_8 },
-	{ "Digit9", SDLK_9 },
-	{ "Numpad0", SDLK_KP_0 },
-	{ "Numpad1", SDLK_KP_1 },
-	{ "Numpad2", SDLK_KP_2 },
-	{ "Numpad3", SDLK_KP_3 },
-	{ "Numpad4", SDLK_KP_4 },
-	{ "Numpad5", SDLK_KP_5 },
-	{ "Numpad6", SDLK_KP_6 },
-	{ "Numpad7", SDLK_KP_7 },
-	{ "Numpad8", SDLK_KP_8 },
-	{ "Numpad9", SDLK_KP_9 },
-	{ "NumpadAdd", SDLK_KP_MEMADD },
-	{ "NumpadDecimal", SDLK_KP_PERIOD },
-	{ "NumpadDivide", SDLK_KP_DIVIDE },
-	{ "NumpadEnter", SDLK_KP_ENTER },
-	{ "NumpadMultiply", SDLK_KP_MULTIPLY },
-	{ "NumpadSubtract", SDLK_KP_MINUS },
-	{ "KeyO", SDLK_o },
-	{ "KeyP", SDLK_p },
-	{ "PageDown", SDLK_PAGEDOWN },
-	{ "PageUp", SDLK_PAGEUP },
-	{ "Pause", SDLK_PAUSE },
-	{ "Period", SDLK_PERIOD },
-	{ "KeyQ", SDLK_q },
-	{ "Quote", SDLK_QUOTE },
-	{ "KeyR", SDLK_r },
-//	{ "Red", SDLK_UNKNOWN }, // TODO
-	{ "ArrowRight", SDLK_RIGHT },
-	{ "BracketRight", SDLK_RIGHTBRACKET },
-	{ "KeyS", SDLK_s },
-	{ "BrowserSearch", SDLK_AC_SEARCH },
-	{ "Semicolon", SDLK_SEMICOLON },
-	{ "ShiftLeft", SDLK_LSHIFT },
-	{ "Slash", SDLK_SLASH },
-	{ "Space", SDLK_SPACE },
-//	{ "Subtitle", SDLK_UNKNOWN }, // TODO
-	{ "KeyT", SDLK_t },
-	{ "Tab", SDLK_TAB },
-	{ "KeyU", SDLK_u },
-	{ "ArrowUp", SDLK_UP },
-	{ "KeyV", SDLK_v },
-	{ "KeyW", SDLK_w },
-	{ "KeyX", SDLK_x },
-	{ "KeyY", SDLK_y },
-//	{ "Yellow", SDLK_UNKNOWN }, // TODO
-	{ "KeyZ", SDLK_z },
-	{ "PrintScreen", SDLK_PRINTSCREEN },
-	{ "", SDLK_UNKNOWN } // indicator for last entry
+ppKeyMap ppkeymap[] =
+{
+	{ "KeyA", AS3KEYCODE_A },
+	{ "AltLeft", AS3KEYCODE_ALTERNATE },
+	{ "KeyB", AS3KEYCODE_B },
+	{ "BrowserBack", AS3KEYCODE_BACK },
+	{ "Backquote", AS3KEYCODE_BACKQUOTE },
+	{ "Backslash", AS3KEYCODE_BACKSLASH },
+	{ "Backspace", AS3KEYCODE_BACKSPACE },
+	{ "Blue", AS3KEYCODE_BLUE },
+	{ "KeyC", AS3KEYCODE_C },
+	{ "CapsLock", AS3KEYCODE_CAPS_LOCK },
+	{ "Comma", AS3KEYCODE_COMMA },
+	{ "ControlLeft", AS3KEYCODE_CONTROL },
+	{ "ControlRight", AS3KEYCODE_CONTROL },
+	{ "KeyD", AS3KEYCODE_D },
+	{ "Delete", AS3KEYCODE_DELETE },
+	{ "ArrowDown", AS3KEYCODE_DOWN },
+	{ "KeyE", AS3KEYCODE_E },
+	{ "End", AS3KEYCODE_END },
+	{ "Enter", AS3KEYCODE_ENTER },
+	{ "Equal", AS3KEYCODE_EQUAL },
+	{ "Escape", AS3KEYCODE_ESCAPE },
+	{ "KeyF", AS3KEYCODE_F },
+	{ "F1", AS3KEYCODE_F1 },
+	{ "F2", AS3KEYCODE_F2 },
+	{ "F3", AS3KEYCODE_F3 },
+	{ "F4", AS3KEYCODE_F4 },
+	{ "F5", AS3KEYCODE_F5 },
+	{ "F6", AS3KEYCODE_F6 },
+	{ "F7", AS3KEYCODE_F7 },
+	{ "F8", AS3KEYCODE_F8 },
+	{ "F9", AS3KEYCODE_F9 },
+	{ "F10", AS3KEYCODE_F10 },
+	{ "F11", AS3KEYCODE_F11 },
+	{ "F12", AS3KEYCODE_F12 },
+	{ "F13", AS3KEYCODE_F13 },
+	{ "F14", AS3KEYCODE_F14 },
+	{ "F15", AS3KEYCODE_F15 },
+	{ "KeyG", AS3KEYCODE_G },
+	{ "Green", AS3KEYCODE_GREEN },
+	{ "KeyH", AS3KEYCODE_H },
+	{ "Help", AS3KEYCODE_HELP },
+	{ "Home", AS3KEYCODE_HOME },
+	{ "KeyI", AS3KEYCODE_I },
+	{ "Insert", AS3KEYCODE_INSERT },
+	{ "KeyJ", AS3KEYCODE_J },
+	{ "KeyK", AS3KEYCODE_K },
+	{ "KeyL", AS3KEYCODE_L },
+	{ "ArrowLeft", AS3KEYCODE_LEFT },
+	{ "BracketLeft", AS3KEYCODE_LEFTBRACKET },
+	{ "KeyM", AS3KEYCODE_M },
+	{ "Minus", AS3KEYCODE_MINUS },
+	{ "KeyN", AS3KEYCODE_N },
+	{ "Digit0", AS3KEYCODE_NUMBER_0 },
+	{ "Digit1", AS3KEYCODE_NUMBER_1 },
+	{ "Digit2", AS3KEYCODE_NUMBER_2 },
+	{ "Digit3", AS3KEYCODE_NUMBER_3 },
+	{ "Digit4", AS3KEYCODE_NUMBER_4 },
+	{ "Digit5", AS3KEYCODE_NUMBER_5 },
+	{ "Digit6", AS3KEYCODE_NUMBER_6 },
+	{ "Digit7", AS3KEYCODE_NUMBER_7 },
+	{ "Digit8", AS3KEYCODE_NUMBER_8 },
+	{ "Digit9", AS3KEYCODE_NUMBER_9 },
+	{ "Numpad0", AS3KEYCODE_NUMPAD_0 },
+	{ "Numpad1", AS3KEYCODE_NUMPAD_1 },
+	{ "Numpad2", AS3KEYCODE_NUMPAD_2 },
+	{ "Numpad3", AS3KEYCODE_NUMPAD_3 },
+	{ "Numpad4", AS3KEYCODE_NUMPAD_4 },
+	{ "Numpad5", AS3KEYCODE_NUMPAD_5 },
+	{ "Numpad6", AS3KEYCODE_NUMPAD_6 },
+	{ "Numpad7", AS3KEYCODE_NUMPAD_7 },
+	{ "Numpad8", AS3KEYCODE_NUMPAD_8 },
+	{ "Numpad9", AS3KEYCODE_NUMPAD_9 },
+	{ "NumpadAdd", AS3KEYCODE_NUMPAD_ADD },
+	{ "NumpadDecimal", AS3KEYCODE_NUMPAD_DECIMAL },
+	{ "NumpadDivide", AS3KEYCODE_NUMPAD_DIVIDE },
+	{ "NumpadEnter", AS3KEYCODE_NUMPAD_ENTER },
+	{ "NumpadMultiply", AS3KEYCODE_NUMPAD_MULTIPLY },
+	{ "NumpadSubtract", AS3KEYCODE_NUMPAD_SUBTRACT },
+	{ "KeyO", AS3KEYCODE_O },
+	{ "KeyP", AS3KEYCODE_P },
+	{ "PageDown", AS3KEYCODE_PAGE_DOWN },
+	{ "PageUp", AS3KEYCODE_PAGE_UP },
+	{ "Pause", AS3KEYCODE_PAUSE },
+	{ "Period", AS3KEYCODE_PERIOD },
+	{ "KeyQ", AS3KEYCODE_Q },
+	{ "Quote", AS3KEYCODE_QUOTE },
+	{ "KeyR", AS3KEYCODE_R },
+	{ "Red", AS3KEYCODE_RED },
+	{ "ArrowRight", AS3KEYCODE_RIGHT },
+	{ "BracketRight", AS3KEYCODE_RIGHTBRACKET },
+	{ "KeyS", AS3KEYCODE_S },
+	{ "BrowserSearch", AS3KEYCODE_SEARCH },
+	{ "Semicolon", AS3KEYCODE_SEMICOLON },
+	{ "ShiftLeft", AS3KEYCODE_SHIFT },
+	{ "Slash", AS3KEYCODE_SLASH },
+	{ "Space", AS3KEYCODE_SPACE },
+	{ "Subtitle", AS3KEYCODE_SUBTITLE },
+	{ "KeyT", AS3KEYCODE_T },
+	{ "Tab", AS3KEYCODE_TAB },
+	{ "KeyU", AS3KEYCODE_U },
+	{ "ArrowUp", AS3KEYCODE_UP },
+	{ "KeyV", AS3KEYCODE_V },
+	{ "KeyW", AS3KEYCODE_W },
+	{ "KeyX", AS3KEYCODE_X },
+	{ "KeyY", AS3KEYCODE_Y },
+	{ "Yellow", AS3KEYCODE_YELLOW },
+	{ "KeyZ", AS3KEYCODE_Z },
+	{ "", AS3KEYCODE_UNKNOWN } // indicator for last entry
 };
-SDL_Keycode getppSDLKeyCode(PP_Resource input_event)
+
+static AS3KeyCode getppAS3KeyCode(PP_Resource input_event)
 {
 	PP_Var v = g_keyboardinputevent_interface->GetCode(input_event);
 	uint32_t len;
 	const char* key = g_var_interface->VarToUtf8(v,&len);
-	int i = 0;
-	while (*ppkeymap[i].ppkey)
+
+	for (size_t i = 0; *ppkeymap[i].ppkey != '\0'; ++i)
 	{
-		if (strcmp(ppkeymap[i].ppkey,key) == 0)
-			return ppkeymap[i].sdlkeycode;
-		++i;
+		if (strcmp(ppkeymap[i].ppkey, key) == 0)
+			return ppkeymap[i].keyCode;
 	}
-	LOG(LOG_NOT_IMPLEMENTED,"no matching keycode for input event found:"<<key);
-	return SDLK_UNKNOWN;
-};
-static uint16_t getppKeyModifier(PP_Resource input_event)
+	LOG(LOG_NOT_IMPLEMENTED, "no matching keycode for input event found: " << key);
+	return AS3KEYCODE_UNKNOWN;
+}
+
+static LSModifier getppLSModifier(PP_Resource input_event)
 {
 	uint32_t mod = g_inputevent_interface->GetModifiers(input_event);
-	uint16_t res = KMOD_NONE;
+	LSModifier modifiers = LSModifier::None;
 	if (mod & PP_INPUTEVENT_MODIFIER_CONTROLKEY)
-		res |= KMOD_CTRL;
+		modifiers |= LSModifier::Ctrl;
 	if (mod & PP_INPUTEVENT_MODIFIER_ALTKEY)
-		res |= KMOD_ALT;
+		modifiers |= LSModifier::Alt;
 	if (mod & PP_INPUTEVENT_MODIFIER_SHIFTKEY)
-		res |= KMOD_SHIFT;
-	return res;
+		modifiers |= LSModifier::Shift;
+	return modifiers;
 }
 
 PP_Bool ppPluginInstance::handleInputEvent(PP_Resource input_event)
 {
+	using Button = LSMouseButtonEvent::Button;
+	using ButtonType = LSMouseButtonEvent::ButtonType;
+	using FocusType = LSWindowFocusEvent::FocusType;
+	using KeyType = LSKeyEvent::KeyType;
+
+	EngineData::mainloop_from_plugin(m_sys, &eventLoop);
 	setTLSSys(m_sys);
 	setTLSWorker(m_sys->worker);
-	SDL_Event ev;
+	LSEventStorage ev;
 	switch (g_inputevent_interface->GetType(input_event))
 	{
 		case PP_INPUTEVENT_TYPE_KEYDOWN:
 		{
-			
-			ev.type = SDL_KEYDOWN;
-			ev.key.keysym.sym = getppSDLKeyCode(input_event);
-			ev.key.keysym.mod = getppKeyModifier(input_event);
-			SDL_SetModState((SDL_Keymod)ev.key.keysym.mod);
+			Vector2f mousePos(mousepos.x, mousepos.y);
+			AS3KeyCode key = getppAS3KeyCode(input_event);
+			modifiers = getppLSModifier(input_event);
+			ev = LSKeyEvent
+			(
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				key,
+				key,
+				modifiers,
+				KeyType::Down
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_KEYUP:
 		{
-			ev.type = SDL_KEYUP;
-			ev.key.keysym.sym = getppSDLKeyCode(input_event);
-			ev.key.keysym.mod = getppKeyModifier(input_event);
-			SDL_SetModState((SDL_Keymod)ev.key.keysym.mod);
+			Vector2f mousePos(mousepos.x, mousepos.y);
+			AS3KeyCode key = getppAS3KeyCode(input_event);
+			modifiers = getppLSModifier(input_event);
+			ev = LSKeyEvent
+			(
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				key,
+				key,
+				modifiers,
+				KeyType::Up
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_MOUSEDOWN:
 		{
-			ev.type = SDL_MOUSEBUTTONDOWN;
-			
+			bool isPressed = false;
+			auto ppModifiers = g_inputevent_interface->GetModifiers(input_event);
+			Button button;
+
 			switch (g_mouseinputevent_interface->GetButton(input_event))
 			{
 				case PP_INPUTEVENT_MOUSEBUTTON_LEFT:
-					ev.button.button = SDL_BUTTON_LEFT;
-					ev.button.state = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+					button = Button::Left;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN;
+					break;
+				case PP_INPUTEVENT_MOUSEBUTTON_MIDDLE:
+					button = Button::Middle;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_MIDDLEBUTTONDOWN;
 					break;
 				case PP_INPUTEVENT_MOUSEBUTTON_RIGHT:
-					ev.button.button = SDL_BUTTON_RIGHT;
-					ev.button.state = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+					button = Button::Right;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN;
 					break;
 				default:
-					ev.button.button = 0;
-					ev.button.state = SDL_RELEASED;
+					button = Button::Invalid;
 					break;
 			}
-			ev.button.clicks = g_mouseinputevent_interface->GetClickCount(input_event);
+
+			int clicks = g_mouseinputevent_interface->GetClickCount(input_event);
 			mousepos = g_mouseinputevent_interface->GetPosition(input_event);
-			ev.button.x = mousepos.x;
-			ev.button.y = mousepos.y;
+			Vector2f mousePos(mousepos.x, mousepos.y);
+
+			ev = LSMouseButtonEvent
+			(
+				0,
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				modifiers,
+				isPressed,
+				button,
+				clicks,
+				clicks == 2 ?
+				ButtonType::DoubleClick :
+				ButtonType::Down
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_MOUSEUP:
 		{
-			ev.type = SDL_MOUSEBUTTONUP;
+			bool isPressed = false;
+			auto ppModifiers = g_inputevent_interface->GetModifiers(input_event);
+			Button button;
+
 			switch (g_mouseinputevent_interface->GetButton(input_event))
 			{
 				case PP_INPUTEVENT_MOUSEBUTTON_LEFT:
-					ev.button.button = SDL_BUTTON_LEFT;
-					ev.button.state = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+					button = Button::Left;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN;
+					break;
+				case PP_INPUTEVENT_MOUSEBUTTON_MIDDLE:
+					button = Button::Middle;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_MIDDLEBUTTONDOWN;
 					break;
 				case PP_INPUTEVENT_MOUSEBUTTON_RIGHT:
-					ev.button.button = SDL_BUTTON_RIGHT;
-					ev.button.state = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+					button = Button::Right;
+					isPressed = ppModifiers & PP_INPUTEVENT_MODIFIER_RIGHTBUTTONDOWN;
 					if (this->m_sys && this->m_sys->getEngineData())
-					{
 						this->m_sys->getEngineData()->incontextmenupreparing = true;
-						this->m_sys->getEngineData()->startSDLEventTicker(this->m_sys);
-					}
 					break;
 				default:
-					ev.button.button = 0;
-					ev.button.state = SDL_RELEASED;
+					button = Button::Invalid;
 					break;
 			}
-			ev.button.clicks = 0;
 			mousepos = g_mouseinputevent_interface->GetPosition(input_event);
-			ev.button.x = mousepos.x;
-			ev.button.y = mousepos.y;
+			Vector2f mousePos(mousepos.x, mousepos.y);
+
+			ev = LSMouseButtonEvent
+			(
+				0,
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				modifiers,
+				isPressed,
+				button,
+				0,
+				ButtonType::Up
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_MOUSEMOVE:
 		{
-			ev.type = SDL_MOUSEMOTION;
-			ev.motion.state = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
-			PP_Point p = g_mouseinputevent_interface->GetPosition(input_event);
-			ev.motion.x = p.x;
-			ev.motion.y = p.y;
+			bool isPressed = g_inputevent_interface->GetModifiers(input_event) & PP_INPUTEVENT_MODIFIER_LEFTBUTTONDOWN;
+			mousepos = g_mouseinputevent_interface->GetPosition(input_event);
+			Vector2f mousePos(mousepos.x, mousepos.y);
+			ev = LSMouseMoveEvent
+			(
+				0,
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				modifiers,
+				isPressed
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_WHEEL:
 		{
+			Vector2f mousePos(mousepos.x, mousepos.y);
 			PP_FloatPoint p = g_wheelinputevent_interface->GetDelta(input_event);
-			ev.type = SDL_MOUSEWHEEL;
-#if SDL_VERSION_ATLEAST(2, 0, 4)
-			ev.wheel.direction = p.y > 0 ? SDL_MOUSEWHEEL_NORMAL : SDL_MOUSEWHEEL_FLIPPED ;
-#endif
-			ev.wheel.x = p.x;
-			ev.wheel.y = p.y;
+
+			ev = LSMouseWheelEvent
+			(
+				0,
+				mousePos,
+				m_sys->windowToStagePoint(mousePos),
+				modifiers,
+				false,
+				p.y
+			);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_MOUSELEAVE:
 		{
-			ev.type = SDL_WINDOWEVENT_LEAVE;
+			ev = LSWindowFocusEvent(FocusType::Mouse, false);
 			break;
 		}
 		case PP_INPUTEVENT_TYPE_CONTEXTMENU:
@@ -1239,8 +1323,22 @@ PP_Bool ppPluginInstance::handleInputEvent(PP_Resource input_event)
 			LOG(LOG_NOT_IMPLEMENTED,"ppp_inputevent:"<<(int)g_inputevent_interface->GetType(input_event));
 			return PP_FALSE;
 	}
-	EngineData::mainloop_handleevent(&ev,this->m_sys);
+	EngineData::mainloop_handleevent(ev,this->m_sys);
 	return PP_TRUE;
+}
+
+void ppPluginEventLoop::notify()
+{
+	auto cb = PP_MakeCompletionCallback([](void* data, int32_t result)
+	{
+		ppPluginEventLoop* eventLoop = static_cast<ppPluginEventLoop*>(data);
+		EngineData::mainloop_from_plugin
+		(
+			eventLoop->instance->getSystemState(),
+			eventLoop
+		);
+	}, this);
+	g_core_interface->CallOnMainThread(0, cb, 0);
 }
 
 void executescript_callback(void* userdata,int result)
@@ -1587,7 +1685,7 @@ extern "C"
 			Log::redirect(envvar);
 		
 		Log::setLogLevel(log_level);
-		EngineData::sdl_needinit = false;
+		EngineData::needinit = false;
 		lightspark::SystemState::staticInit();
 		
 		LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2013 Alessandro Pignotti and others");
@@ -1716,15 +1814,16 @@ extern "C"
 
 void ppPluginEngineData::contextmenucallbackfunc(void *user_data, int32_t result)
 {
+	ppPluginEngineData* engineData = static_cast<ppPluginEngineData*>(user_data);
+	setTLSSys(engineData->sys);
+	setTLSWorker(engineData->sys->worker);
 	if (result != PP_ERROR_USERCANCEL)
-	{
-		((ppPluginEngineData*)user_data)->selectContextMenuItem();
-	}
+		engineData->selectContextMenuItem();
 	for (uint32_t i = 0; i <((ppPluginEngineData*)user_data)->ppcontextmenu.count; i++)
-	{
-		delete[] ((ppPluginEngineData*)user_data)->ppcontextmenu.items[i].name;
-	}
-	delete[] ((ppPluginEngineData*)user_data)->ppcontextmenu.items;
+		delete[] engineData->ppcontextmenu.items[i].name;
+	delete[] engineData->ppcontextmenu.items;
+	setTLSSys(nullptr);
+	setTLSWorker(nullptr);
 }
 void ppPluginEngineData::openContextMenu()
 {
@@ -1763,7 +1862,7 @@ uint32_t ppPluginEngineData::getWindowForGnash()
 }
 struct userevent_callbackdata
 {
-	void (*func) (SystemState*);
+	EngineData::MainThreadCallback func;
 	SystemState* sys;
 };
 
@@ -1773,12 +1872,17 @@ void exec_ppPluginEngineData_callback(void* userdata,int result)
 	data->func(data->sys);
 	delete data;
 }
-void ppPluginEngineData::runInMainThread(SystemState* sys, void (*func) (SystemState*) )
+
+void ppPluginEngineData::runInTrueMainThread(SystemState* sys, MainThreadCallback func)
 {
-	userevent_callbackdata* ue = new userevent_callbackdata;
-	ue->func=func;
-	ue->sys=sys;
-	g_messageloop_interface->PostWork(this->instance->getMessageLoop(),PP_MakeCompletionCallback(exec_ppPluginEngineData_callback,ue),0);
+	userevent_callbackdata* ue = new userevent_callbackdata { func, sys };
+	g_core_interface->CallOnMainThread(0, PP_MakeCompletionCallback(exec_ppPluginEngineData_callback,ue), 0);
+}
+
+void ppPluginEngineData::runInMainThread(SystemState* sys, MainThreadCallback func)
+{
+	userevent_callbackdata* ue = new userevent_callbackdata { func, sys };
+	g_messageloop_interface->PostWork(instance->getMessageLoop(), PP_MakeCompletionCallback(exec_ppPluginEngineData_callback,ue), 0);
 }
 
 void ppPluginEngineData::setLocalStorageAllowedMarker(bool allowed)
@@ -2018,6 +2122,11 @@ void ppPluginEngineData::exec_glUniform4f(int location, float v0, float v1, floa
 	g_gles2_interface->Uniform4f(instance->m_graphics,location,v0,v1,v2,v3);
 }
 
+void ppPluginEngineData::exec_glUniform1fv(int location, uint32_t size, float* v)
+{
+	g_gles2_interface->Uniform1fv(instance->m_graphics,location,size,v);
+}
+
 void ppPluginEngineData::exec_glBindTexture_GL_TEXTURE_2D(uint32_t id)
 {
 	g_gles2_interface->BindTexture(instance->m_graphics,GL_TEXTURE_2D,id);
@@ -2100,32 +2209,32 @@ void ppPluginEngineData::exec_glEnable_GL_DEPTH_TEST()
 {
 	g_gles2_interface->Enable(instance->m_graphics,GL_DEPTH_TEST);
 }
-void ppPluginEngineData::exec_glDepthFunc(DEPTH_FUNCTION depthfunc)
+void ppPluginEngineData::exec_glDepthFunc(DEPTHSTENCIL_FUNCTION depthfunc)
 {
 	switch (depthfunc)
 	{
-		case ALWAYS:
+		case DEPTHSTENCIL_ALWAYS:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_ALWAYS);
 			break;
-		case EQUAL:
+		case DEPTHSTENCIL_EQUAL:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_EQUAL);
 			break;
-		case GREATER:
+		case DEPTHSTENCIL_GREATER:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_GREATER);
 			break;
-		case GREATER_EQUAL:
+		case DEPTHSTENCIL_GREATER_EQUAL:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_GEQUAL);
 			break;
-		case LESS:
+		case DEPTHSTENCIL_LESS:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_LESS);
 			break;
-		case LESS_EQUAL:
+		case DEPTHSTENCIL_LESS_EQUAL:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_LEQUAL);
 			break;
-		case NEVER:
+		case DEPTHSTENCIL_NEVER:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_NEVER);
 			break;
-		case NOT_EQUAL:
+		case DEPTHSTENCIL_NOT_EQUAL:
 			g_gles2_interface->DepthFunc(instance->m_graphics,GL_NOTEQUAL);
 			break;
 	}
@@ -2150,6 +2259,10 @@ void ppPluginEngineData::exec_glDisable_GL_TEXTURE_2D()
 void ppPluginEngineData::exec_glFlush()
 {
 	g_gles2_interface->Flush(instance->m_graphics);
+}
+void ppPluginEngineData::exec_glFinish()
+{
+	g_gles2_interface->Finish(instance->m_graphics);
 }
 
 uint32_t ppPluginEngineData::exec_glCreateShader_GL_FRAGMENT_SHADER()
@@ -2300,6 +2413,16 @@ void ppPluginEngineData::exec_glDeleteTextures(int32_t n,uint32_t* textures)
 void ppPluginEngineData::exec_glDeleteBuffers(uint32_t size, uint32_t* buffers)
 {
 	g_gles2_interface->DeleteBuffers(instance->m_graphics,size, buffers);
+}
+
+void ppPluginEngineData::exec_glDeleteFramebuffers(uint32_t size,uint32_t* buffers)
+{
+	g_gles2_interface->DeleteFramebuffers(instance->m_graphics,size,buffers);
+}
+
+void ppPluginEngineData::exec_glDeleteRenderbuffers(uint32_t size,uint32_t* buffers)
+{
+	g_gles2_interface->DeleteRenderbuffers(instance->m_graphics,size,buffers);
 }
 
 void ppPluginEngineData::exec_glBlendFunc(BLEND_FACTOR src, BLEND_FACTOR dst)
@@ -2472,12 +2595,12 @@ void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D_GL_UNSIGNED_INT_8_8_8_8
 {
 	g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_HOST, pixels);
 }
-void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D(int32_t level, int32_t width, int32_t height, int32_t border, void* pixels, TEXTUREFORMAT format, TEXTUREFORMAT_COMPRESSED compressedformat, uint32_t compressedImageSize)
+void ppPluginEngineData::glTexImage2Dintern(uint32_t type,int32_t level,int32_t width, int32_t height,int32_t border, void* pixels, TEXTUREFORMAT format, TEXTUREFORMAT_COMPRESSED compressedformat,uint32_t compressedImageSize)
 {
 	switch (format)
 	{
 		case TEXTUREFORMAT::BGRA:
-			g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+			g_gles2_interface->TexImage2D(instance->m_graphics, type, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 			break;
 		case TEXTUREFORMAT::BGR:
 			for (int i = 0; i < width*height*3; i += 3) {
@@ -2485,14 +2608,14 @@ void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D(int32_t level, int32_t 
 				((uint8_t*)pixels)[i] = ((uint8_t*)pixels)[i+2];
 				((uint8_t*)pixels)[i+2] = t;
 			}
-			g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_RGB, width, height, border, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+			g_gles2_interface->TexImage2D(instance->m_graphics, type, level, GL_RGB, width, height, border, GL_RGB, GL_UNSIGNED_BYTE, pixels);
 			break;
 		case TEXTUREFORMAT::BGRA_PACKED:
-			g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, pixels);
+			g_gles2_interface->TexImage2D(instance->m_graphics, type, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, pixels);
 			break;
 		case TEXTUREFORMAT::BGR_PACKED:
 			LOG(LOG_NOT_IMPLEMENTED,"textureformat BGR_PACKED for opengl es");
-			g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_RGB, width, height, border, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, pixels);
+			g_gles2_interface->TexImage2D(instance->m_graphics, type, level, GL_RGB, width, height, border, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, pixels);
 			break;
 		case TEXTUREFORMAT::COMPRESSED:
 		case TEXTUREFORMAT::COMPRESSED_ALPHA:
@@ -2500,7 +2623,10 @@ void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D(int32_t level, int32_t 
 			switch (compressedformat)
 			{
 				case TEXTUREFORMAT_COMPRESSED::DXT5:
-					g_gles2_interface->CompressedTexImage2D(instance->m_graphics,GL_TEXTURE_2D, level, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, width, height, border, compressedImageSize, pixels);
+					g_gles2_interface->CompressedTexImage2D(instance->m_graphics, type, level, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, width, height, border, compressedImageSize, pixels);
+					break;
+				case TEXTUREFORMAT_COMPRESSED::DXT1:
+					g_gles2_interface->CompressedTexImage2D(instance->m_graphics, type, level, GL_COMPRESSED_RGB_S3TC_DXT1_EXT, width, height, border, compressedImageSize, pixels);
 					break;
 				default:
 					LOG(LOG_NOT_IMPLEMENTED,"upload texture in compressed format "<<compressedformat);
@@ -2516,7 +2642,10 @@ void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D(int32_t level, int32_t 
 			break;
 	}
 }
-
+void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_2D(int32_t level, int32_t width, int32_t height, int32_t border, void* pixels, TEXTUREFORMAT format, TEXTUREFORMAT_COMPRESSED compressedformat, uint32_t compressedImageSize, bool isRectangleTexture)
+{
+	glTexImage2Dintern(isRectangleTexture ? GL_TEXTURE_RECTANGLE_ARB : GL_TEXTURE_2D,level, width, height, border, pixels, format, compressedformat,compressedImageSize);
+}
 void ppPluginEngineData::exec_glDrawBuffer_GL_BACK()
 {
 	// PPAPI has no DrawBuffer
@@ -2571,12 +2700,22 @@ void ppPluginEngineData::exec_glGenerateMipmap_GL_TEXTURE_2D()
 {
 	g_gles2_interface->GenerateMipmap(instance->m_graphics,GL_TEXTURE_2D);
 }
+void ppPluginEngineData::exec_glGenerateMipmap_GL_TEXTURE_CUBE_MAP()
+{
+	g_gles2_interface->GenerateMipmap(instance->m_graphics,GL_TEXTURE_CUBE_MAP);
+}
 
 void ppPluginEngineData::exec_glReadPixels(int32_t width, int32_t height, void *buf)
 {
 	g_gles2_interface->PixelStorei(instance->m_graphics,GL_PACK_ALIGNMENT, 1);
 	g_gles2_interface->ReadPixels(instance->m_graphics,0,0,width, height, GL_RGB, GL_UNSIGNED_BYTE, buf);
 }
+void ppPluginEngineData::exec_glReadPixels_GL_BGRA(int32_t width, int32_t height,void *buf)
+{
+	g_gles2_interface->PixelStorei(instance->m_graphics,GL_PACK_ALIGNMENT, 1);
+	g_gles2_interface->ReadPixels(instance->m_graphics,0,0,width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buf);
+}
+
 void ppPluginEngineData::exec_glBindTexture_GL_TEXTURE_CUBE_MAP(uint32_t id)
 {
 	g_gles2_interface->BindTexture(instance->m_graphics,GL_TEXTURE_CUBE_MAP, id);
@@ -2589,9 +2728,9 @@ void ppPluginEngineData::exec_glTexParameteri_GL_TEXTURE_CUBE_MAP_GL_TEXTURE_MAG
 {
 	g_gles2_interface->TexParameteri(instance->m_graphics,GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
-void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_CUBE_MAP_POSITIVE_X_GL_UNSIGNED_BYTE(uint32_t side, int32_t level,int32_t width, int32_t height,int32_t border, const void* pixels)
+void ppPluginEngineData::exec_glTexImage2D_GL_TEXTURE_CUBE_MAP_POSITIVE_X_GL_UNSIGNED_BYTE(uint32_t side, int32_t level,int32_t width, int32_t height,int32_t border, void* pixels, TEXTUREFORMAT format, TEXTUREFORMAT_COMPRESSED compressedformat, uint32_t compressedImageSize)
 {
-	g_gles2_interface->TexImage2D(instance->m_graphics,GL_TEXTURE_CUBE_MAP_POSITIVE_X+side, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	glTexImage2Dintern(GL_TEXTURE_CUBE_MAP_POSITIVE_X+side, level, width, height, border, pixels, format, compressedformat,compressedImageSize);
 }
 
 void ppPluginEngineData::exec_glScissor(int32_t x, int32_t y, int32_t width, int32_t height)
@@ -2612,6 +2751,173 @@ void ppPluginEngineData::exec_glColorMask(bool red, bool green, bool blue, bool 
 void ppPluginEngineData::exec_glStencilFunc_GL_ALWAYS()
 {
 	g_gles2_interface->StencilFunc(instance->m_graphics,GL_ALWAYS, 0, 0xff);
+}
+void ppPluginEngineData::exec_glStencilFunc_GL_NEVER()
+{
+	g_gles2_interface->StencilFunc(instance->m_graphics,GL_NEVER, 0, 0xff);
+}
+
+void ppPluginEngineData::exec_glStencilFunc_GL_EQUAL(int32_t ref, uint32_t mask)
+{
+	g_gles2_interface->StencilFunc(instance->m_graphics,GL_EQUAL, ref, mask);
+}
+
+void ppPluginEngineData::exec_glStencilOp_GL_INCR()
+{
+	g_gles2_interface->StencilOp(instance->m_graphics,GL_KEEP, GL_KEEP, GL_INCR);
+}
+
+void ppPluginEngineData::exec_glStencilOp_GL_DECR()
+{
+	g_gles2_interface->StencilOp(instance->m_graphics,GL_KEEP, GL_KEEP, GL_DECR);
+}
+
+void ppPluginEngineData::exec_glStencilOp_GL_KEEP()
+{
+	g_gles2_interface->StencilOp(instance->m_graphics,GL_KEEP, GL_KEEP, GL_KEEP);
+}
+
+void ppPluginEngineData::exec_glStencilOpSeparate(TRIANGLE_FACE face, DEPTHSTENCIL_OP sfail, DEPTHSTENCIL_OP dpfail, DEPTHSTENCIL_OP dppass)
+{
+	GLenum glface=GL_FRONT;
+	switch (face)
+	{
+		case FACE_BACK:
+			glface=GL_BACK;
+			break;
+		case FACE_FRONT:
+			glface=GL_FRONT;
+			break;
+		case FACE_FRONT_AND_BACK:
+			glface=GL_FRONT_AND_BACK;
+			break;
+		case FACE_NONE:
+			glface=GL_NONE;
+			break;
+	}
+	GLenum glsfail=GL_KEEP;
+	switch (sfail)
+	{
+		case DEPTHSTENCIL_KEEP: 
+			glsfail=GL_KEEP;
+			break;
+		case DEPTHSTENCIL_ZERO:
+			glsfail=GL_ZERO;
+			break;
+		case DEPTHSTENCIL_REPLACE:
+			glsfail=GL_REPLACE;
+			break;
+		case DEPTHSTENCIL_INCR:
+			glsfail=GL_INCR;
+			break;
+		case DEPTHSTENCIL_INCR_WRAP:
+			glsfail=GL_INCR_WRAP;
+			break;
+		case DEPTHSTENCIL_DECR:
+			glsfail=GL_DECR;
+			break;
+		case DEPTHSTENCIL_DECR_WRAP:
+			glsfail=GL_DECR_WRAP;
+			break;
+		case DEPTHSTENCIL_INVERT:
+			glsfail=GL_INVERT;
+			break;
+	}
+	GLenum gldpfail=GL_KEEP;
+	switch (dpfail)
+	{
+		case DEPTHSTENCIL_KEEP: 
+			gldpfail=GL_KEEP;
+			break;
+		case DEPTHSTENCIL_ZERO:
+			gldpfail=GL_ZERO;
+			break;
+		case DEPTHSTENCIL_REPLACE:
+			gldpfail=GL_REPLACE;
+			break;
+		case DEPTHSTENCIL_INCR:
+			gldpfail=GL_INCR;
+			break;
+		case DEPTHSTENCIL_INCR_WRAP:
+			gldpfail=GL_INCR_WRAP;
+			break;
+		case DEPTHSTENCIL_DECR:
+			gldpfail=GL_DECR;
+			break;
+		case DEPTHSTENCIL_DECR_WRAP:
+			gldpfail=GL_DECR_WRAP;
+			break;
+		case DEPTHSTENCIL_INVERT:
+			gldpfail=GL_INVERT;
+			break;
+	}
+	GLenum gldppass=GL_KEEP;
+	switch (dppass)
+	{
+		case DEPTHSTENCIL_KEEP: 
+			gldppass=GL_KEEP;
+			break;
+		case DEPTHSTENCIL_ZERO:
+			gldppass=GL_ZERO;
+			break;
+		case DEPTHSTENCIL_REPLACE:
+			gldppass=GL_REPLACE;
+			break;
+		case DEPTHSTENCIL_INCR:
+			gldppass=GL_INCR;
+			break;
+		case DEPTHSTENCIL_INCR_WRAP:
+			gldppass=GL_INCR_WRAP;
+			break;
+		case DEPTHSTENCIL_DECR:
+			gldppass=GL_DECR;
+			break;
+		case DEPTHSTENCIL_DECR_WRAP:
+			gldppass=GL_DECR_WRAP;
+			break;
+		case DEPTHSTENCIL_INVERT:
+			gldppass=GL_INVERT;
+			break;
+	}
+	g_gles2_interface->StencilOpSeparate(instance->m_graphics,glface, glsfail, gldpfail, gldppass);
+}
+
+void ppPluginEngineData::exec_glStencilMask(uint32_t mask)
+{
+	g_gles2_interface->StencilMask(instance->m_graphics,mask);
+}
+
+void ppPluginEngineData::exec_glStencilFunc(DEPTHSTENCIL_FUNCTION func, uint32_t ref, uint32_t mask)
+{
+	uint32_t f = GL_ALWAYS;
+	switch (func)
+	{
+		case DEPTHSTENCIL_ALWAYS:
+			f = GL_ALWAYS;
+			break;
+		case DEPTHSTENCIL_EQUAL:
+			f = GL_EQUAL;
+			break;
+		case DEPTHSTENCIL_GREATER:
+			f = GL_GREATER;
+			break;
+		case DEPTHSTENCIL_GREATER_EQUAL:
+			f = GL_GEQUAL;
+			break;
+		case DEPTHSTENCIL_LESS:
+			f = GL_LESS;
+			break;
+		case DEPTHSTENCIL_LESS_EQUAL:
+			f = GL_LEQUAL;
+			break;
+		case DEPTHSTENCIL_NEVER:
+			f = GL_NEVER;
+			break;
+		case DEPTHSTENCIL_NOT_EQUAL:
+			f = GL_NOTEQUAL;
+			break;
+	}
+	g_gles2_interface->StencilFunc(instance->m_graphics,f,ref,mask);
 }
 
 void audio_callback(void* sample_buffer,uint32_t buffer_size_in_bytes,PP_TimeDelta latency,void* user_data)
@@ -2730,6 +3036,9 @@ int32_t ppPluginEngineData::setupFontRenderer(const TextData &_textData,float a,
 	PP_Resource font = g_browserfont_interface->Create(instance->m_ppinstance,&desc);
 	if (font == 0)
 		LOG(LOG_ERROR,"couldn't create font:"<<_textData.font);
-	g_browserfont_interface->DrawTextAt(font,image_data,&text,&pos,color,nullptr,smoothing != SMOOTH_MODE::SMOOTH_NONE ? PP_TRUE : PP_FALSE);
+	runInTrueMainThread(sys, [=](SystemState* sys)
+	{
+		g_browserfont_interface->DrawTextAt(font,image_data,&text,&pos,color,nullptr,smoothing != SMOOTH_MODE::SMOOTH_NONE ? PP_TRUE : PP_FALSE);
+	});
 	return image_data;
 }

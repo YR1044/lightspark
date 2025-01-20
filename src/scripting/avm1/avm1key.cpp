@@ -20,6 +20,7 @@
 #include "scripting/avm1/avm1key.h"
 #include "scripting/class.h"
 #include "scripting/argconv.h"
+#include "scripting/flash/display/Stage.h"
 #include "backends/input.h"
 
 using namespace std;
@@ -47,11 +48,11 @@ void AVM1Key::sinit(Class_base* c)
 	c->setVariableAtomByQName("TAB",nsNameAndKind(),asAtomHandler::fromUInt(9),CONSTANT_TRAIT);
 	c->setVariableAtomByQName("UP",nsNameAndKind(),asAtomHandler::fromUInt(38),CONSTANT_TRAIT);
 
-	c->setDeclaredMethodByQName("isDown","",Class<IFunction>::getFunction(c->getSystemState(),isDown),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("addListener","",Class<IFunction>::getFunction(c->getSystemState(),addListener),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("removeListener","",Class<IFunction>::getFunction(c->getSystemState(),removeListener),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("getCode","",Class<IFunction>::getFunction(c->getSystemState(),getCode),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("getAscii","",Class<IFunction>::getFunction(c->getSystemState(),getAscii),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("isDown","",c->getSystemState()->getBuiltinFunction(isDown),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("addListener","",c->getSystemState()->getBuiltinFunction(addListener),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("removeListener","",c->getSystemState()->getBuiltinFunction(removeListener),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("getCode","",c->getSystemState()->getBuiltinFunction(getCode),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("getAscii","",c->getSystemState()->getBuiltinFunction(getAscii),NORMAL_METHOD,false);
 }
 
 ASFUNCTIONBODY_ATOM(AVM1Key,isDown)
@@ -83,12 +84,12 @@ ASFUNCTIONBODY_ATOM(AVM1Key,getCode)
 }
 ASFUNCTIONBODY_ATOM(AVM1Key,getAscii)
 {
-	SDL_Keycode c = wrk->getSystemState()->getInputThread()->getLastKeyCode();
+	AS3KeyCode c = wrk->getSystemState()->getInputThread()->getLastKeyCode();
 	if ((c < 0x20) || (c > 0x80))
-		c = 0;
-	SDL_Keymod m = wrk->getSystemState()->getInputThread()->getLastKeyMod();
-	if (m & KMOD_SHIFT)
-		c = toupper(c);
+		c = AS3KEYCODE_UNKNOWN;
+	LSModifier m = wrk->getSystemState()->getInputThread()->getLastKeyMod();
+	if (m & LSModifier::Shift)
+		c = (AS3KeyCode)toupper((int)c);
 	asAtomHandler::setInt(ret,wrk,c);
 }
 
@@ -98,10 +99,10 @@ void AVM1Mouse::sinit(Class_base* c)
 {
 	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
 
-	c->setDeclaredMethodByQName("hide","",Class<IFunction>::getFunction(c->getSystemState(),hide),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("show","",Class<IFunction>::getFunction(c->getSystemState(),show),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("addListener","",Class<IFunction>::getFunction(c->getSystemState(),addListener),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("removeListener","",Class<IFunction>::getFunction(c->getSystemState(),removeListener),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("hide","",c->getSystemState()->getBuiltinFunction(hide),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("show","",c->getSystemState()->getBuiltinFunction(show),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("addListener","",c->getSystemState()->getBuiltinFunction(addListener),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("removeListener","",c->getSystemState()->getBuiltinFunction(removeListener),NORMAL_METHOD,false);
 }
 
 ASFUNCTIONBODY_ATOM(AVM1Mouse,hide)

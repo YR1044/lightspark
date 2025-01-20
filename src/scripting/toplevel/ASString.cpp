@@ -26,6 +26,8 @@
 #include "compat.h"
 #include "scripting/argconv.h"
 #include "parsing/amf3_generator.h"
+#include "scripting/toplevel/IFunction.h"
+#include "scripting/toplevel/Array.h"
 #include "scripting/toplevel/RegExp.h"
 
 using namespace std;
@@ -89,51 +91,51 @@ void ASString::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_FINAL | CLASS_SEALED);
 	c->isReusable = true;
-	c->setDeclaredMethodByQName("split",AS3,Class<IFunction>::getFunction(c->getSystemState(),split,2,Class<Array>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("substr",AS3,Class<IFunction>::getFunction(c->getSystemState(),substr,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("substring",AS3,Class<IFunction>::getFunction(c->getSystemState(),substring,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("replace",AS3,Class<IFunction>::getFunction(c->getSystemState(),replace,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("concat",AS3,Class<IFunction>::getFunction(c->getSystemState(),concat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("match",AS3,Class<IFunction>::getFunction(c->getSystemState(),match,1,Class<Array>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("search",AS3,Class<IFunction>::getFunction(c->getSystemState(),search,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("indexOf",AS3,Class<IFunction>::getFunction(c->getSystemState(),indexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("lastIndexOf",AS3,Class<IFunction>::getFunction(c->getSystemState(),lastIndexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("charCodeAt",AS3,Class<IFunction>::getFunction(c->getSystemState(),charCodeAt,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("charAt",AS3,Class<IFunction>::getFunction(c->getSystemState(),charAt,1,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(c->getSystemState(),slice,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toLocaleLowerCase",AS3,Class<IFunction>::getFunction(c->getSystemState(),toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toLocaleUpperCase",AS3,Class<IFunction>::getFunction(c->getSystemState(),toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toLowerCase",AS3,Class<IFunction>::getFunction(c->getSystemState(),toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toUpperCase",AS3,Class<IFunction>::getFunction(c->getSystemState(),toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("localeCompare",AS3,Class<IFunction>::getFunction(c->getSystemState(),localeCompare,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("split",AS3,c->getSystemState()->getBuiltinFunction(split,2,Class<Array>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("substr",AS3,c->getSystemState()->getBuiltinFunction(substr,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("substring",AS3,c->getSystemState()->getBuiltinFunction(substring,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("replace",AS3,c->getSystemState()->getBuiltinFunction(replace,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("concat",AS3,c->getSystemState()->getBuiltinFunction(concat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("match",AS3,c->getSystemState()->getBuiltinFunction(match,1,Class<Array>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("search",AS3,c->getSystemState()->getBuiltinFunction(search,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("indexOf",AS3,c->getSystemState()->getBuiltinFunction(indexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("lastIndexOf",AS3,c->getSystemState()->getBuiltinFunction(lastIndexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("charCodeAt",AS3,c->getSystemState()->getBuiltinFunction(charCodeAt,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("charAt",AS3,c->getSystemState()->getBuiltinFunction(charAt,1,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("slice",AS3,c->getSystemState()->getBuiltinFunction(slice,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toLocaleLowerCase",AS3,c->getSystemState()->getBuiltinFunction(toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toLocaleUpperCase",AS3,c->getSystemState()->getBuiltinFunction(toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toLowerCase",AS3,c->getSystemState()->getBuiltinFunction(toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toUpperCase",AS3,c->getSystemState()->getBuiltinFunction(toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("localeCompare",AS3,c->getSystemState()->getBuiltinFunction(localeCompare,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 	// According to specs fromCharCode belongs to AS3 namespace,
 	// but also empty namespace is seen in the wild and should be
 	// supported.
-	c->setDeclaredMethodByQName("fromCharCode",AS3,Class<IFunction>::getFunction(c->getSystemState(),fromCharCode,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("fromCharCode","",Class<IFunction>::getFunction(c->getSystemState(),fromCharCode,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(c->getSystemState(),_getLength,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(c->getSystemState(),_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(c->getSystemState(),_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("fromCharCode",AS3,c->getSystemState()->getBuiltinFunction(fromCharCode,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("fromCharCode","",c->getSystemState()->getBuiltinFunction(fromCharCode,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("length","",c->getSystemState()->getBuiltinFunction(_getLength,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("toString",AS3,c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("valueOf",AS3,c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 
-	c->prototype->setVariableByQName("split","",Class<IFunction>::getFunction(c->getSystemState(),split,2,Class<Array>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("substr","",Class<IFunction>::getFunction(c->getSystemState(),substr,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("substring","",Class<IFunction>::getFunction(c->getSystemState(),substring,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("replace","",Class<IFunction>::getFunction(c->getSystemState(),replace,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("concat","",Class<IFunction>::getFunction(c->getSystemState(),concat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("match","",Class<IFunction>::getFunction(c->getSystemState(),match,1,Class<Array>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("search","",Class<IFunction>::getFunction(c->getSystemState(),search,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("indexOf","",Class<IFunction>::getFunction(c->getSystemState(),indexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("lastIndexOf","",Class<IFunction>::getFunction(c->getSystemState(),lastIndexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("charCodeAt","",Class<IFunction>::getFunction(c->getSystemState(),charCodeAt,0,Class<Number>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("charAt","",Class<IFunction>::getFunction(c->getSystemState(),charAt,1,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("slice","",Class<IFunction>::getFunction(c->getSystemState(),slice,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toLocaleLowerCase","",Class<IFunction>::getFunction(c->getSystemState(),toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toLocaleUpperCase","",Class<IFunction>::getFunction(c->getSystemState(),toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toLowerCase","",Class<IFunction>::getFunction(c->getSystemState(),toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toUpperCase","",Class<IFunction>::getFunction(c->getSystemState(),toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(c->getSystemState(),_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(c->getSystemState(),_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("localeCompare","",Class<IFunction>::getFunction(c->getSystemState(),localeCompare_prototype,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("split","",c->getSystemState()->getBuiltinFunction(split,2,Class<Array>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("substr","",c->getSystemState()->getBuiltinFunction(substr,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("substring","",c->getSystemState()->getBuiltinFunction(substring,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("replace","",c->getSystemState()->getBuiltinFunction(replace,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("concat","",c->getSystemState()->getBuiltinFunction(concat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("match","",c->getSystemState()->getBuiltinFunction(match,1,Class<Array>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("search","",c->getSystemState()->getBuiltinFunction(search,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("indexOf","",c->getSystemState()->getBuiltinFunction(indexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("lastIndexOf","",c->getSystemState()->getBuiltinFunction(lastIndexOf,2,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("charCodeAt","",c->getSystemState()->getBuiltinFunction(charCodeAt,0,Class<Number>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("charAt","",c->getSystemState()->getBuiltinFunction(charAt,1,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("slice","",c->getSystemState()->getBuiltinFunction(slice,2,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("toLocaleLowerCase","",c->getSystemState()->getBuiltinFunction(toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("toLocaleUpperCase","",c->getSystemState()->getBuiltinFunction(toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("toLowerCase","",c->getSystemState()->getBuiltinFunction(toLowerCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("toUpperCase","",c->getSystemState()->getBuiltinFunction(toUpperCase,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
+	c->prototype->setVariableByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("localeCompare","",c->getSystemState()->getBuiltinFunction(localeCompare_prototype,1,Class<Integer>::getRef(c->getSystemState()).getPtr()),CONSTANT_TRAIT);
 }
 
 ASFUNCTIONBODY_ATOM(ASString,search)
@@ -253,6 +255,7 @@ ASFUNCTIONBODY_ATOM(ASString,match)
 			asAtom a = match->as<Array>()->at(0);
 			ASATOM_INCREF(a);
 			resarr->push(a);
+			match->decRef();
 		}
 
 		// According to ECMA we should return Null if resarr
@@ -420,7 +423,7 @@ ASFUNCTIONBODY_ATOM(ASString,split)
 				break;
 			ASObject* s;
 			if (data.isSinglebyte()) // fast path for ascii strings to avoid unneccessary buffer copying
-				s=abstract_s(wrk,data.raw_buf()+start,match-start,match-start,data.isSinglebyte(),data.hasNullEntries());
+				s=abstract_s(wrk,data.raw_buf()+start,match-start,match-start,data.isSinglebyte(),data.hasNullEntries(),data.isIntegerValue());
 			else
 				s=abstract_s(wrk,data.substr(start,(match-start)));
 			res->push(asAtomHandler::fromObject(s));
@@ -517,18 +520,56 @@ ASFUNCTIONBODY_ATOM(ASString,substring)
 number_t ASString::toNumber()
 {
 	assert_and_throw(implEnable);
+	return toNumber(getInstanceWorker(),getData());
+}
 
-	const char *s = getData().raw_buf();
+number_t ASString::toNumber(ASWorker* wrk, const tiny_string& value)
+{
+	auto swfVersion = wrk->AVM1getSwfVersion();
+	bool isAS3 = wrk->needsActionScript3();
+	if (swfVersion < 6 && value.empty())
+		return numeric_limits<double>::quiet_NaN();
+	const char *s = value.raw_buf();
 	while (*s && isEcmaSpace(g_utf8_get_char(s)))
 		s = g_utf8_next_char(s);
 
 	double val;
 	char *end = nullptr;
-	val = parseStringInfinite(s, &end);
+	val = isAS3 ? parseStringInfinite(s, &end) : 0;
 
 	// If did not parse as infinite, try decimal
 	if (!std::isinf(val))
 	{
+		if (!wrk->needsActionScript3() && value.numBytes()>1)
+		{
+			int radix = 0;
+			if (s[0]=='0' && isdigit(s[1]))
+			{
+				// parse as octal number
+				radix = 8;
+			}
+
+			if (s[0]=='0' && (s[1] == 'x' || s[1]=='X'))
+			{
+				// parse as hex number
+				radix = 16;
+			}
+
+			if (radix != 0)
+			{
+				// Radix prefixes are only allowed in SWF 6, and later.
+				if (swfVersion >= 6)
+				{
+					Integer::fromStringFlashCompatible(s, val, radix);
+					return val;
+				}
+				// In SWF 5, and earlier, hex values are treated as an
+				// error, while octal values are treated as if they were
+				// a decimal value.
+				else if (radix == 16)
+					return swfVersion >= 5 ? Number::NaN : 0;
+			}
+		}
 		errno = 0;
 		val = g_ascii_strtod(s, &end);
 
@@ -547,17 +588,20 @@ number_t ASString::toNumber()
 		}
 	}
 
-	// Fail if there is any rubbish after the converted number
-	while(*end) {
-		if(!isEcmaSpace(g_utf8_get_char(end)))
-			return numeric_limits<double>::quiet_NaN();
-		end = g_utf8_next_char(end);
+	// SWF 4 isn't as strict as later versions.
+	if (swfVersion >= 5)
+	{
+		// Fail if there is any rubbish after the converted number
+		while(*end) {
+			if(!isEcmaSpace(g_utf8_get_char(end)))
+				return numeric_limits<double>::quiet_NaN();
+			end = g_utf8_next_char(end);
+		}
 	}
-
 	return val;
 }
 
-number_t ASString::parseStringInfinite(const char *s, char **end) const
+number_t ASString::parseStringInfinite(const char *s, char **end)
 {
 	if (end)
 		*end = const_cast<char *>(s);
@@ -712,9 +756,9 @@ string ASString::toDebugString() const
 		ret = std::string("\"") + std::string(getSystemState()->getStringFromUniqueId(stringId)) + "\"_id";
 	else
 		ret = std::string("\"") + std::string(data) + "\"";
-#ifndef _NDEBUG
+#ifndef NDEBUG
 	char buf[300];
-	sprintf(buf,"(%p/%d/%d%s) ",this,this->getRefCount(),this->storedmembercount,this->isConstructed()?"":" not constructed");
+	sprintf(buf,"(%p/%d/%d/%d%s) ",this,this->getRefCount(),this->storedmembercount,this->getConstant(),this->isConstructed()?"":" not constructed");
 	ret += buf;
 #endif
 	return ret;
@@ -750,7 +794,7 @@ ASFUNCTIONBODY_ATOM(ASString,slice)
 	else
 	{
 		if (data.isSinglebyte()) // fast path for ascii strings to avoid unneccessary buffer copying
-			ret = asAtomHandler::fromObject(abstract_s(wrk,data.raw_buf()+startIndex,endIndex-startIndex,endIndex-startIndex,data.isSinglebyte(),data.hasNullEntries()));
+			ret = asAtomHandler::fromObject(abstract_s(wrk,data.raw_buf()+startIndex,endIndex-startIndex,endIndex-startIndex,data.isSinglebyte(),data.hasNullEntries(),data.isIntegerValue()));
 		else
 			ret = asAtomHandler::fromObject(abstract_s(wrk,data.substr(startIndex,endIndex-startIndex)));
 	}
@@ -862,7 +906,12 @@ ASFUNCTIONBODY_ATOM(ASString,indexOf)
 
 ASFUNCTIONBODY_ATOM(ASString,lastIndexOf)
 {
-	assert_and_throw(argslen==1 || argslen==2);
+	if (argslen < 1)
+	{
+		LOG(LOG_ERROR,"not enough arguments in String.lastIndexOf");
+		asAtomHandler::setInt(ret,wrk,-1);
+		return;
+	}
 	tiny_string data;
 	asAtomHandler::getStringView(data,obj,wrk);
 	tiny_string val=asAtomHandler::toString(args[0],wrk);
@@ -968,7 +1017,7 @@ ASFUNCTIONBODY_ATOM(ASString,replace)
 	asAtomHandler::getStringView(data,obj,wrk);
 	enum REPLACE_TYPE { STRING=0, FUNC };
 	REPLACE_TYPE type;
-	ASString* res=abstract_s(wrk,data.raw_buf(),data.numBytes(), data.numChars(), data.isSinglebyte(), data.hasNullEntries())->as<ASString>();
+	ASString* res=abstract_s(wrk,data.raw_buf(),data.numBytes(), data.numChars(), data.isSinglebyte(), data.hasNullEntries(),data.isIntegerValue())->as<ASString>();
 	tiny_string replaceWith;
 	if(argslen < 2)
 	{
@@ -1013,6 +1062,7 @@ ASFUNCTIONBODY_ATOM(ASString,replace)
 		do
 		{
 			tiny_string replaceWithTmp = replaceWith;
+			int dataLength = res->getData().numBytes();
 			int rc=pcre_exec(pcreRE, &extra, res->getData().raw_buf(), res->getData().numBytes(), offset, PCRE_NO_UTF8_CHECK, ovector, (capturingGroups+1)*3);
 			if(rc<0)
 			{
@@ -1041,8 +1091,8 @@ ASFUNCTIONBODY_ATOM(ASString,replace)
 				subargs.push_back(asAtomHandler::fromObject(abstract_s(wrk,data)));
 				asAtom ret=asAtomHandler::invalidAtom;
 				asAtom obj = asAtomHandler::nullAtom;
-				if (asAtomHandler::as<IFunction>(args[1])->closure_this) // use closure as "this" in function call
-					obj = asAtomHandler::fromObject(asAtomHandler::as<IFunction>(args[1])->closure_this);
+				if (asAtomHandler::isValid(asAtomHandler::as<IFunction>(args[1])->closure_this)) // use closure as "this" in function call
+					obj = asAtomHandler::as<IFunction>(args[1])->closure_this;
 				asAtomHandler::callFunction(args[1],wrk,ret,obj, subargs.data(), subargs.size(),true);
 				replaceWithTmp=asAtomHandler::toString(ret,wrk).raw_buf();
 				ASATOM_DECREF(ret);
@@ -1088,6 +1138,8 @@ ASFUNCTIONBODY_ATOM(ASString,replace)
 					replaceWithTmp.replace(pos, ipos-pos, group);
 				}
 			}
+			if (ovector[0] > dataLength)
+				break;
 			prevsubstring += res->getData().substr_bytes(ovector[0],ovector[1]-ovector[0]);
 			res->hasId = false;
 			res->getData().replace_bytes(ovector[0],ovector[1]-ovector[0],replaceWithTmp);
@@ -1134,6 +1186,8 @@ ASFUNCTIONBODY_ATOM(ASString,generator)
 	assert(argslen<=1);
 	if (argslen == 0)
 		ret = asAtomHandler::fromStringID(BUILTIN_STRINGS::EMPTY);
+	else if (asAtomHandler::isUndefined(args[0]))
+		ret = asAtomHandler::fromStringID(wrk->AVM1getSwfVersion() < 7 ? BUILTIN_STRINGS::EMPTY : BUILTIN_STRINGS::STRING_UNDEFINED);
 	else
 		ret = asAtomHandler::fromObject(abstract_s(wrk,asAtomHandler::toString(args[0],wrk)));
 }

@@ -37,11 +37,13 @@ struct sorton_field
 	multiname fieldname;
 	sorton_field(const multiname& sortfieldname):isNumeric(false),isCaseInsensitive(false),isDescending(false),fieldname(sortfieldname){}
 };
-struct sorton_value
+struct sort_value
 {
 	std::vector<asAtom> sortvalues;
 	asAtom dataAtom;
-	sorton_value(asAtom _dataAtom):dataAtom(_dataAtom) {}
+	int originalindex;
+	bool fromprototype;
+	sort_value(asAtom _dataAtom,int _originalindex,bool _fromprototype):dataAtom(_dataAtom),originalindex(_originalindex),fromprototype(_fromprototype) {}
 };
 
 class Array: public ASObject
@@ -55,6 +57,8 @@ protected:
 	
 	void outofbounds(unsigned int index) const;
 	~Array();
+	void fillUnsortedArray(std::vector<sort_value>& tmp, std::vector<sorton_field>& sortfields);
+	void fillSortedArray(asAtom& ret, std::vector<sort_value>& tmp, bool isUniqueSort, bool returnIndexedArray, bool isCaseInsensitive, bool hasDuplicates);
 private:
 	class sortComparatorDefault
 	{
@@ -65,30 +69,42 @@ private:
 		bool useoldversion;
 	public:
 		sortComparatorDefault(bool oldversion, bool n, bool ci, bool d):isNumeric(n),isCaseInsensitive(ci),isDescending(d),useoldversion(oldversion){}
-		bool operator()(const asAtom& d1, const asAtom& d2);
+		bool operator()(const sort_value& d1, const sort_value& d2);
 	};
-	class sortOnComparator
+	tiny_string toString_priv(bool localized=false);
+	int capIndex(int i);
+	void getIntegerNameListFromPrototypeChain(std::map<int32_t, asAtom>& members);
+	asAtom getMemberFromPrototypeChain(int index, std::map<int32_t, asAtom>& members);
+	void fillFromPrototypeChain(uint32_t startindex, uint32_t count);
+public:
+	void constructorImpl(asAtom *args, const unsigned int argslen);
+	class ISortComparator
+	{
+	public:
+		ISortComparator():hasduplicates(false){}
+		virtual ~ISortComparator(){}
+		virtual number_t compare(const sort_value& d1, const sort_value& d2)=0;
+		bool hasduplicates;
+	};
+	class sortOnComparator : public ISortComparator
 	{
 	private:
 		std::vector<sorton_field> fields;
-		SystemState* sys;
 	public:
-		sortOnComparator(const std::vector<sorton_field>& sf,SystemState* s):fields(sf),sys(s){}
-		bool operator()(const sorton_value& d1, const sorton_value& d2);
+		sortOnComparator(const std::vector<sorton_field>& sf):ISortComparator(),fields(sf){}
+		number_t compare(const sort_value& d1, const sort_value& d2) override;
 	};
-	void constructorImpl(asAtom *args, const unsigned int argslen);
-	tiny_string toString_priv(bool localized=false);
-	int capIndex(int i);
-public:
-	class sortComparatorWrapper
+	class sortComparatorWrapper : public ISortComparator
 	{
 	private:
 		asAtom comparator;
 	public:
-		sortComparatorWrapper(asAtom c):comparator(c){}
-		number_t compare(const asAtom& d1, const asAtom& d2);
+		sortComparatorWrapper(asAtom c):ISortComparator(),comparator(c){}
+		virtual number_t compare(const sort_value& d1, const sort_value& d2);
 	};
 	static bool isIntegerWithoutLeadingZeros(const tiny_string& value);
+	virtual bool isAVM1Array() const { return false; }
+	virtual Array* createInstance();// returns new AVM1Array if this is an AVM1Array
 	enum SORTTYPE { CASEINSENSITIVE=1, DESCENDING=2, UNIQUESORT=4, RETURNINDEXEDARRAY=8, NUMERIC=16 };
 	Array(ASWorker *w,Class_base* c);
 	void finalize() override;
@@ -97,7 +113,7 @@ public:
 	bool countCylicMemberReferences(garbagecollectorstate& gcstate) override;
 	
 	//These utility methods are also used by ByteArray
-	static bool isValidMultiname(SystemState* sys,const multiname& name, uint32_t& index);
+	static bool isValidMultiname(ASWorker* wrk, const multiname& name, uint32_t& index);
 	static bool isValidQName(const tiny_string& name, const tiny_string& ns, unsigned int& index);
 
 	static void sinit(Class_base*);
@@ -130,7 +146,7 @@ public:
 	ASFUNCTION_ATOM(insertAt);
 	ASFUNCTION_ATOM(removeAt);
 
-	asAtom at(unsigned int index);
+	asAtom at(unsigned int index, bool checkinvalid=false);
 	FORCE_INLINE void at_nocheck(asAtom& ret,unsigned int index)
 	{
 		if (index < ARRAY_SIZE_THRESHOLD)
@@ -147,11 +163,11 @@ public:
 		if (asAtomHandler::isInvalid(ret))
 			asAtomHandler::setUndefined(ret);
 	}
-	
+	bool hasEntry(uint32_t index);
 	bool set(unsigned int index, asAtom &o, bool checkbounds = true, bool addref = true, bool addmember=true);
 	uint64_t size();
 	void push(asAtom o);// push doesn't increment the refcount, so the caller has to take care of that
-	void resize(uint64_t n);
+	void resize(uint64_t n, bool removemember=true);
 	GET_VARIABLE_RESULT getVariableByMultiname(asAtom& ret, const multiname& name, GET_VARIABLE_OPTION opt, ASWorker* wrk) override;
 	GET_VARIABLE_RESULT getVariableByInteger(asAtom& ret, int index, GET_VARIABLE_OPTION opt, ASWorker* wrk) override;
 	

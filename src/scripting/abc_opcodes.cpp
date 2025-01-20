@@ -23,21 +23,28 @@
 #include "exceptions.h"
 #include "compat.h"
 #include "scripting/abcutils.h"
+#include "scripting/toplevel/toplevel.h"
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/ASString.h"
+#include "scripting/toplevel/Global.h"
+#include "scripting/toplevel/Namespace.h"
+#include "scripting/toplevel/Null.h"
 #include "scripting/toplevel/Number.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
 #include "scripting/toplevel/RegExp.h"
 #include "scripting/toplevel/XML.h"
 #include "scripting/toplevel/XMLList.h"
+#include "scripting/toplevel/Undefined.h"
 #include "scripting/flash/utils/Proxy.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "parsing/streams.h"
 
 using namespace std;
 using namespace lightspark;
 
+extern void setCallException(const asAtom& obj, multiname* name, ASWorker* wrk);
 int32_t ABCVm::bitAnd(ASObject* val2, ASObject* val1)
 {
 	int32_t i1=val1->toInt();
@@ -79,7 +86,7 @@ void ABCVm::setProperty(ASObject* value,ASObject* obj,multiname* name)
 	asAtom v = asAtomHandler::fromObject(value);
 	bool alreadyset=false;
 	obj->setVariableByMultiname(*name,v,ASObject::CONST_NOT_ALLOWED,&alreadyset,obj->getInstanceWorker());
-	if (alreadyset)
+	if (alreadyset || (obj->getInstanceWorker()->currentCallContext && obj->getInstanceWorker()->currentCallContext->exceptionthrown))
 		value->decRef();
 	obj->decRef();
 }
@@ -208,7 +215,7 @@ void ABCVm::coerce(call_context* th, int n)
 
 	RUNTIME_STACK_POINTER_CREATE(th,o);
 
-	const Type* type = mn->cachedType != nullptr ? mn->cachedType : Type::getTypeFromMultiname(mn, th->mi->context);
+	Type* type = mn->cachedType != nullptr ? mn->cachedType : Type::getTypeFromMultiname(mn, th->mi->context);
 	if (type == nullptr)
 	{
 		LOG(LOG_ERROR,"coerce: type not found:"<< *mn);
@@ -392,21 +399,9 @@ void ABCVm::callPropIntern(call_context *th, int n, int m, bool keepReturn, bool
 		createError<TypeError>(th->worker,kConvertUndefinedToObjectError);
 		return;
 	}
-	bool canCache = false;
-	ASObject* pobj = asAtomHandler::getObject(obj);
 	asAtom o=asAtomHandler::invalidAtom;
-	if (!pobj)
-	{
-		// fast path for primitives to avoid creation of ASObjects
-		asAtomHandler::getVariableByMultiname(obj,o,th->sys,*name,th->worker);
-		canCache = asAtomHandler::isValid(o);
-	}
-	if(asAtomHandler::isInvalid(o))
-	{
-		pobj = asAtomHandler::toObject(obj,th->worker);
-		//We should skip the special implementation of get
-		canCache = pobj->getVariableByMultiname(o,*name, SKIP_IMPL,th->worker) & GET_VARIABLE_RESULT::GETVAR_CACHEABLE;
-	}
+	bool canCache = false;
+	asAtomHandler::getVariableByMultiname(obj,o,*name,th->worker,canCache,GET_VARIABLE_OPTION::SKIP_IMPL);
 	name->resetNameIfObject();
 	if(asAtomHandler::isInvalid(o) && asAtomHandler::is<Class_base>(obj))
 	{
@@ -471,6 +466,7 @@ void ABCVm::callPropIntern(call_context *th, int n, int m, bool keepReturn, bool
 			callPropertyName.name_s_id=th->sys->getUniqueStringId("callProperty");
 			callPropertyName.ns.emplace_back(th->sys,flash_proxy,NAMESPACE);
 			asAtom oproxy=asAtomHandler::invalidAtom;
+			ASObject* pobj = asAtomHandler::getObjectNoCheck(obj);
 			pobj->getVariableByMultiname(oproxy,callPropertyName,GET_VARIABLE_OPTION::SKIP_IMPL,th->worker);
 			if(asAtomHandler::isValid(oproxy))
 			{
@@ -483,7 +479,7 @@ void ABCVm::callPropIntern(call_context *th, int n, int m, bool keepReturn, bool
 				{
 					//Create a new array
 					asAtom* proxyArgs=g_newa(asAtom, m+1);
-					ASObject* namearg = abstract_s(th->worker,name->normalizedName(th->sys));
+					ASObject* namearg = abstract_s(th->worker,name->normalizedName(th->worker));
 					namearg->setProxyProperty(*name);
 					proxyArgs[0]=asAtomHandler::fromObject(namearg);
 					for(int i=0;i<m;i++)
@@ -515,27 +511,7 @@ void ABCVm::callPropIntern(call_context *th, int n, int m, bool keepReturn, bool
 		}
 		for(int i=0;i<m;i++)
 			ASATOM_DECREF(args[i]);
-		//LOG(LOG_NOT_IMPLEMENTED,"callProperty: " << name->qualifiedString(th->sys) << " not found on " << obj->toDebugString());
-		if (pobj->hasPropertyByMultiname(*name,true,true,th->worker))
-		{
-			tiny_string clsname = pobj->getClass()->getQualifiedClassName();
-			createError<ReferenceError>(th->worker,kWriteOnlyError, name->normalizedName(th->sys), clsname);
-		}
-		if (pobj->getClass() && pobj->getClass()->isSealed)
-		{
-			tiny_string clsname = pobj->getClass()->getQualifiedClassName();
-			createError<ReferenceError>(th->worker,kReadSealedError, name->normalizedName(th->sys), clsname);
-		}
-		if (asAtomHandler::is<Class_base>(obj))
-		{
-			tiny_string clsname = asAtomHandler::as<Class_base>(obj)->class_name.getQualifiedName(th->sys);
-			createError<TypeError>(th->worker,kCallNotFoundError, name->qualifiedString(th->sys), clsname);
-		}
-		else
-		{
-			tiny_string clsname = pobj->getClassName();
-			createError<TypeError>(th->worker,kCallNotFoundError, name->qualifiedString(th->sys), clsname);
-		}
+		setCallException(obj, name, th->worker);
 
 		ASATOM_DECREF(obj);
 		if(keepReturn)
@@ -963,39 +939,21 @@ void ABCVm::construct(call_context* th, int m)
 	LOG_CALL("End of constructing " << asAtomHandler::toDebugString(ret));
 	RUNTIME_STACK_PUSH(th,ret);
 }
-
-void ABCVm::constructGenericType(call_context* th, int m)
+asAtom ABCVm::constructGenericType_intern(ABCContext* context, ASObject* obj, int m, ASObject** args)
 {
-	LOG_CALL( "constructGenericType " << m);
-	if (m != 1)
-	{
-		createError<TypeError>(th->worker,kWrongTypeArgCountError, "function", "1", Integer::toString(m));
-		return;
-	}
-	ASObject** args=g_newa(ASObject*, m);
-	for(int i=0;i<m;i++)
-	{
-		RUNTIME_STACK_POP_ASOBJECT(th,args[m-i-1]);
-	}
-
-	RUNTIME_STACK_POP_CREATE_ASOBJECT(th,obj);
-
 	if(obj->getObjectType() != T_TEMPLATE)
 	{
 		LOG(LOG_NOT_IMPLEMENTED, "constructGenericType of " << obj->getObjectType());
 		obj->decRef();
-		obj = th->sys->getUndefinedRef();
-		RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(obj));
 		for(int i=0;i<m;i++)
 			args[i]->decRef();
-		return;
+		return asAtomHandler::undefinedAtom;
 	}
 
 	Template_base* o_template=static_cast<Template_base*>(obj);
-
 	/* Instantiate the template to obtain a class */
 
-	std::vector<const Type*> t(m);
+	std::vector<Type*> t(m);
 	for(int i=0;i<m;++i)
 	{
 		if(args[i]->is<Class_base>())
@@ -1007,11 +965,45 @@ void ABCVm::constructGenericType(call_context* th, int m)
 			obj->decRef();
 			for(int i=0;i<m;i++)
 				args[i]->decRef();
-			createError<TypeError>(th->worker,0,"Wrong type in applytype");
-			return;
+			return asAtomHandler::invalidAtom;
 		}
 	}
-	Class_base* o_class = o_template->applyType(t,th->mi->context->root->applicationDomain);
+	Class_base* o_class = o_template->applyType(t,context->applicationDomain);
+	return asAtomHandler::fromObjectNoPrimitive(o_class);
+
+}
+void ABCVm::constructGenericType(call_context* th, int m)
+{
+
+	th->explicitConstruction = true;
+	LOG_CALL( "constructGenericType " << m);
+	if (m != 1)
+	{
+		th->explicitConstruction = false;
+		createError<TypeError>(th->worker,kWrongTypeArgCountError, "function", "1", Integer::toString(m));
+		return;
+	}
+	ASObject** args=g_newa(ASObject*, m);
+	for(int i=0;i<m;i++)
+	{
+		RUNTIME_STACK_POP_ASOBJECT(th,args[m-i-1]);
+	}
+
+	RUNTIME_STACK_POP_CREATE_ASOBJECT(th,obj);
+
+	asAtom res = constructGenericType_intern(th->mi->context, obj, m, args);
+	RUNTIME_STACK_PUSH(th,res);
+	if (asAtomHandler::isInvalid(res))
+	{
+		th->explicitConstruction = false;
+		createError<TypeError>(th->worker,0,"Wrong type in applytype");
+		return;
+	}
+	if (asAtomHandler::isUndefined(res))
+	{
+		th->explicitConstruction = false;
+		return;
+	}
 
 	// Register the type name in the global scope. The type name
 	// is later used by the coerce opcode.
@@ -1023,17 +1015,10 @@ void ABCVm::constructGenericType(call_context* th, int m)
 		assert_and_throw(th->curr_scope_stack > 0);
 		global =asAtomHandler::getObject(th->scope_stack[0]);
 	}
-	QName qname = o_class->class_name;
+	QName qname = asAtomHandler::as<Class_base>(res)->class_name;
 	if (!global->hasPropertyByMultiname(qname, false, false,th->worker))
-	{
-		o_class->incRef();
-		global->setVariableByQName(global->getSystemState()->getStringFromUniqueId(qname.nameId),nsNameAndKind(global->getSystemState(),qname.nsStringId,NAMESPACE),o_class,DECLARED_TRAIT);
-	}
-
-	for(int i=0;i<m;++i)
-		args[i]->decRef();
-
-	RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(o_class));
+		global->setVariableAtomByQName(global->getSystemState()->getStringFromUniqueId(qname.nameId),nsNameAndKind(global->getSystemState(),qname.nsStringId,NAMESPACE),res,DECLARED_TRAIT);
+	th->explicitConstruction = false;
 }
 
 ASObject* ABCVm::typeOf(ASObject* obj)
@@ -1236,14 +1221,14 @@ ASObject* ABCVm::add(ASObject* val2, ASObject* val1)
 
 		XMLList* newList=Class<XMLList>::getInstanceS(val1->getInstanceWorker(),true);
 		if(val1->getClass()==xmlClass)
-			newList->append(_MR(static_cast<XML*>(val1)));
+			newList->append(_MNR(static_cast<XML*>(val1)));
 		else //if(val1->getClass()==xmlListClass)
-			newList->append(_MR(static_cast<XMLList*>(val1)));
+			newList->append(_MNR(static_cast<XMLList*>(val1)));
 
 		if(val2->getClass()==xmlClass)
-			newList->append(_MR(static_cast<XML*>(val2)));
+			newList->append(_MNR(static_cast<XML*>(val2)));
 		else //if(val2->getClass()==xmlListClass)
-			newList->append(_MR(static_cast<XMLList*>(val2)));
+			newList->append(_MNR(static_cast<XMLList*>(val2)));
 
 		//The references of val1 and val2 have been passed to the smart references
 		//no decRef is needed
@@ -1602,13 +1587,13 @@ void ABCVm::setSuper(call_context* th, int n)
 
 	RUNTIME_STACK_POP_CREATE_ASOBJECT(th,obj);
 
-	assert_and_throw(th->inClass)
-	assert_and_throw(th->inClass->super);
+	assert_and_throw(th->function->inClass)
+	assert_and_throw(th->function->inClass->super);
 	assert_and_throw(obj->getClass());
-	assert_and_throw(obj->getClass()->isSubClass(th->inClass));
+	assert_and_throw(obj->getClass()->isSubClass(th->function->inClass));
 
 	bool alreadyset=false;
-	obj->setVariableByMultiname_intern(*name,*value,ASObject::CONST_NOT_ALLOWED,th->inClass->super.getPtr(),&alreadyset,th->worker);
+	obj->setVariableByMultiname_intern(*name,*value,ASObject::CONST_NOT_ALLOWED,th->function->inClass->super.getPtr(),&alreadyset,th->worker);
 	if (alreadyset)
 		ASATOM_DECREF_POINTER(value);
 	name->resetNameIfObject();
@@ -1640,8 +1625,8 @@ void ABCVm::getSuper(call_context* th, int n)
 	}
 
 	Class_base* cls = nullptr;
-	if (th->inClass && !th->inClass->super.isNull())
-		cls = th->inClass->super.getPtr();
+	if (th->function->inClass && !th->function->inClass->super.isNull())
+		cls = th->function->inClass->super.getPtr();
 	else if (obj->getClass() && !obj->getClass()->super.isNull())
 		cls = obj->getClass()->super.getPtr();
 	assert_and_throw(cls);
@@ -1776,13 +1761,13 @@ void ABCVm::constructSuper(call_context* th, int m)
 	asAtom obj=asAtomHandler::invalidAtom;
 	RUNTIME_STACK_POP(th,obj);
 
-	assert_and_throw(th->inClass);
-	assert_and_throw(th->inClass->super);
+	assert_and_throw(th->function->inClass);
+	assert_and_throw(th->function->inClass->super);
 	assert_and_throw(asAtomHandler::getObject(obj)->getClass());
-	assert_and_throw(asAtomHandler::getObject(obj)->getClass()->isSubClass(th->inClass));
-	LOG_CALL("Super prototype name " << th->inClass->super->class_name);
+	assert_and_throw(asAtomHandler::getObject(obj)->getClass()->isSubClass(th->function->inClass));
+	LOG_CALL("Super prototype name " << th->function->inClass->super->class_name);
 
-	th->inClass->super->handleConstruction(obj,args, m, false);
+	th->function->inClass->super->handleConstruction(obj,args, m, false);
 	ASATOM_DECREF(obj);
 	LOG_CALL("End super construct "<<asAtomHandler::toDebugString(obj));
 }
@@ -1920,12 +1905,13 @@ void ABCVm::findPropStrictCache(asAtom &ret, call_context* th)
 		if(instrptr->cacheobj2)
 			instrptr->cacheobj2->incRef();
 		if (instrptr->cacheobj1->is<IFunction>())
-			asAtomHandler::setFunction(ret,instrptr->cacheobj1,instrptr->cacheobj2,th->worker);
+			asAtomHandler::setFunction(ret,instrptr->cacheobj1,asAtomHandler::fromObject(instrptr->cacheobj2),th->worker);
 		else
 		{
 			instrptr->cacheobj1->incRef();
 			ret = asAtomHandler::fromObject(instrptr->cacheobj1);
 		}
+		LOG_CALL( "findPropStrictCache cached " << asAtomHandler::toDebugString(ret));
 		return;
 	}
 	multiname* name=th->mi->context->getMultiname(t,th);
@@ -1951,7 +1937,7 @@ void ABCVm::findPropStrictCache(asAtom &ret, call_context* th)
 				// put object in cache
 				instrptr->local3.flags = ABC_OP_CACHED;
 				instrptr->cacheobj1 = asAtomHandler::toObject(ret,th->worker);
-				instrptr->cacheobj2 = asAtomHandler::getClosure(ret);
+				instrptr->cacheobj2 = asAtomHandler::getObject(asAtomHandler::getClosureAtom(ret,asAtomHandler::invalidAtom));
 				if (instrptr->cacheobj1->is<IFunction>())
 					instrptr->cacheobj1->as<IFunction>()->clonedFrom=nullptr;
 			}
@@ -2014,7 +2000,7 @@ void ABCVm::findPropStrictCache(asAtom &ret, call_context* th)
 			// put object in cache
 			instrptr->local3.flags = ABC_OP_CACHED;
 			instrptr->cacheobj1 = asAtomHandler::toObject(ret,th->worker);
-			instrptr->cacheobj2 = asAtomHandler::getClosure(ret);
+			instrptr->cacheobj2 = asAtomHandler::getObject(asAtomHandler::getClosureAtom(ret,asAtomHandler::invalidAtom));
 			if (instrptr->cacheobj1->is<IFunction>())
 				instrptr->cacheobj1->as<IFunction>()->clonedFrom=nullptr;
 		}
@@ -2098,7 +2084,7 @@ void ABCVm::callStatic(call_context* th, int n, int m, method_info** called_mi, 
 	{
 		method_info* mi = th->mi->context->get_method(n);
 		assert_and_throw(mi);
-		SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(th->worker,mi,mi->numArgs());
+		SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(th->worker,mi,mi->numArgs()-mi->numOptions());
 		if(f)
 		{
 			asAtom v = asAtomHandler::fromObject(f);
@@ -2146,13 +2132,21 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info** called_mi, b
 		createError<TypeError>(th->worker,kConvertUndefinedToObjectError);
 		return;
 	}
-
-	assert_and_throw(th->inClass);
-	assert_and_throw(th->inClass->super);
-	assert_and_throw(obj->getClass());
-	assert_and_throw(obj->getClass()->isSubClass(th->inClass));
+	
 	asAtom f=asAtomHandler::invalidAtom;
-	obj->getVariableByMultinameIntern(f,*name,th->inClass->super.getPtr(),GET_VARIABLE_OPTION::NONE, th->worker);
+	if (th->function->fromNewFunction)
+	{
+		assert_and_throw(obj->getClass());
+		obj->getVariableByMultinameIntern(f,*name,obj->getClass(),GET_VARIABLE_OPTION::NONE, th->worker);
+	}
+	else
+	{
+		assert_and_throw(th->function->inClass);
+		assert_and_throw(th->function->inClass->super);
+		assert_and_throw(obj->getClass());
+		assert_and_throw(obj->getClass()->isSubClass(th->function->inClass));
+		obj->getVariableByMultinameIntern(f,*name,th->function->inClass->super.getPtr(),GET_VARIABLE_OPTION::NONE, th->worker);
+	}
 	name->resetNameIfObject();
 	if(asAtomHandler::isValid(f))
 	{
@@ -2174,7 +2168,6 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info** called_mi, b
 bool ABCVm::isType(ABCContext* context, ASObject* obj, multiname* name)
 {
 	bool ret = context->isinstance(obj, name);
-	obj->decRef();
 	return ret;
 }
 
@@ -2243,7 +2236,7 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 	else
 	{
 		real_ret=obj->getObjectType()==type->getObjectType();
-		LOG_CALL("isTypelate on non classed object " << real_ret);
+		LOG_CALL("isTypelate on non classed object " << real_ret <<" "<<obj->toDebugString()<<" "<<type->toDebugString());
 		obj->decRef();
 		type->decRef();
 		return real_ret;
@@ -2375,10 +2368,10 @@ bool ABCVm::in(ASObject* val2, ASObject* val1)
 	multiname name(nullptr);
 	name.name_type=multiname::NAME_OBJECT;
 	//Acquire the reference
-	name.name_o=val1;
+	name.name_o=asAtomHandler::fromObject(val1);
 	name.ns.emplace_back(val2->getSystemState(),BUILTIN_STRINGS::EMPTY,NAMESPACE);
 	bool ret=val2->hasPropertyByMultiname(name, true, true,val2->getInstanceWorker());
-	name.name_o=nullptr;
+	name.name_o=asAtomHandler::invalidAtom;
 	val1->decRef();
 	val2->decRef();
 	return ret;
@@ -2395,6 +2388,7 @@ bool ABCVm::ifFalse(ASObject* obj1)
 
 void ABCVm::constructProp(call_context* th, int n, int m)
 {
+	th->explicitConstruction = true;
 	asAtom* args=g_newa(asAtom, m);
 	for(int i=0;i<m;i++)
 	{
@@ -2438,6 +2432,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 	}
 	else if (asAtomHandler::isTemplate(o))
 	{
+		th->explicitConstruction = false;
 		for(int i=0;i<m;++i)
 			ASATOM_DECREF(args[i]);
 		ASATOM_DECREF(o);
@@ -2447,6 +2442,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 	}
 	else
 	{
+		th->explicitConstruction = false;
 		for(int i=0;i<m;++i)
 			ASATOM_DECREF(args[i]);
 		ASATOM_DECREF(o);
@@ -2461,6 +2457,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 	ASATOM_DECREF(o);
 	ASATOM_DECREF(obj);
 	LOG_CALL("End of constructing " << asAtomHandler::toDebugString(ret));
+	th->explicitConstruction = false;
 }
 
 bool ABCVm::hasNext2(call_context* th, int n, int m)
@@ -2487,21 +2484,24 @@ bool ABCVm::hasNext2(call_context* th, int n, int m)
 
 void ABCVm::newObject(call_context* th, int n)
 {
+	th->explicitConstruction = true;
 	LOG_CALL("newObject " << n);
-	ASObject* ret=Class<ASObject>::getInstanceS(th->worker);
+	ASObject* ret=new_asobject(th->worker);
 	//Duplicated keys overwrite the previous value
-	multiname propertyName(nullptr);
-	propertyName.name_type=multiname::NAME_STRING;
 	for(int i=0;i<n;i++)
 	{
 		RUNTIME_STACK_POP_CREATE(th,value);
 		RUNTIME_STACK_POP_CREATE(th,name);
 		uint32_t nameid=asAtomHandler::toStringId(*name,th->worker);
+		bool isInt = asAtomHandler::isInteger(*name);
+		if (!isInt && asAtomHandler::isString(*name))
+			isInt = Array::isIntegerWithoutLeadingZeros(asAtomHandler::toString(*name,th->worker));
 		ASATOM_DECREF_POINTER(name);
-		ret->setDynamicVariableNoCheck(nameid,*value);
+		ret->setDynamicVariableNoCheck(nameid,*value,isInt);
 	}
 
 	RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(ret));
+	th->explicitConstruction = false;
 }
 
 void ABCVm::getDescendants(call_context* th, int n)
@@ -2515,23 +2515,13 @@ void ABCVm::getDescendants(call_context* th, int n)
 	{
 		XML* xmlObj=Class<XML>::cast(obj);
 		targetobject = xmlObj->getChildrenlist();
-		uint32_t ns_uri = BUILTIN_STRINGS::STRING_WILDCARD;
-		if (name->ns.size() > 0)
-			ns_uri = name->ns[0].nsNameId;
-		xmlObj->getDescendantsByQName(name->normalizedName(th->sys), ns_uri,name->isAttribute, ret);
+		xmlObj->getDescendantsByQName(*name, ret);
 	}
 	else if(obj->getClass()==Class<XMLList>::getClass(th->sys))
 	{
 		XMLList* xmlObj=Class<XMLList>::cast(obj);
-		uint32_t ns_uri = BUILTIN_STRINGS::EMPTY;
-		if (name->ns.size() > 0)
-		{
-			ns_uri = name->ns[0].nsNameId;
-			if (ns_uri == BUILTIN_STRINGS::EMPTY && name->ns.size() == 1)
-				ns_uri=BUILTIN_STRINGS::STRING_WILDCARD;
-		}
 		targetobject = xmlObj;
-		xmlObj->getDescendantsByQName(name->normalizedName(th->sys), ns_uri,name->isAttribute, ret);
+		xmlObj->getDescendantsByQName(*name, ret);
 	}
 	else if(obj->is<Proxy>())
 	{
@@ -2540,7 +2530,7 @@ void ABCVm::getDescendants(call_context* th, int n)
 		callPropertyName.name_s_id=obj->getSystemState()->getUniqueStringId("getDescendants");
 		callPropertyName.ns.emplace_back(th->sys,flash_proxy,NAMESPACE);
 		asAtom o=asAtomHandler::invalidAtom;
-		obj->getVariableByMultiname(o,callPropertyName,SKIP_IMPL,th->worker);
+		GET_VARIABLE_RESULT res = obj->getVariableByMultiname(o,callPropertyName,SKIP_IMPL,th->worker);
 		
 		if(asAtomHandler::isValid(o))
 		{
@@ -2548,20 +2538,21 @@ void ABCVm::getDescendants(call_context* th, int n)
 			
 			//Create a new array
 			asAtom* proxyArgs=g_newa(asAtom, 1);
-			ASObject* namearg = abstract_s(th->worker, name->normalizedName(th->sys));
+			ASObject* namearg = abstract_s(th->worker, name->normalizedName(th->worker));
 			namearg->setProxyProperty(*name);
 			proxyArgs[0]=asAtomHandler::fromObject(namearg);
 
 			//We now suppress special handling
-			LOG_CALL("Proxy::getDescendants");
+			LOG_CALL("Proxy::getDescendants "<<*name<<" "<<asAtomHandler::toDebugString(o));
 			ASATOM_INCREF(o);
 			asAtom v = asAtomHandler::fromObject(obj);
 			asAtom ret=asAtomHandler::invalidAtom;
 			asAtomHandler::callFunction(o,th->worker,ret,v,proxyArgs,1,true);
+			LOG_CALL("Proxy::getDescendants done " << *name<<" "<<asAtomHandler::toDebugString(o));
 			ASATOM_DECREF(o);
 			RUNTIME_STACK_PUSH(th,ret);
-			
-			LOG_CALL("End of calling " << *name);
+			if (res & GET_VARIABLE_RESULT::GETVAR_ISNEWOBJECT)
+				ASATOM_DECREF(o);
 			return;
 		}
 		else
@@ -2646,44 +2637,6 @@ ASObject* ABCVm::hasNext(ASObject* obj,ASObject* cur_index)
 	return abstract_i(obj->getInstanceWorker(),newIndex);
 }
 
-std::vector<Class_base*> classesToLinkInterfaces;
-void ABCVm::SetAllClassLinks()
-{
-	for (unsigned int i = 0; i < classesToLinkInterfaces.size(); i++)
-	{
-		Class_base* cls = classesToLinkInterfaces[i];
-		if (!cls)
-			continue;
-		if (ABCVm::newClassRecursiveLink(cls, cls))
-			classesToLinkInterfaces[i] = nullptr;
-	}
-}
-void ABCVm::AddClassLinks(Class_base* target)
-{
-	classesToLinkInterfaces.push_back(target);
-}
-
-bool ABCVm::newClassRecursiveLink(Class_base* target, Class_base* c)
-{
-	if(c->super)
-	{
-		if (!newClassRecursiveLink(target, c->super.getPtr()))
-			return false;
-	}
-	bool bAllDefined = false;
-	const vector<Class_base*>& interfaces=c->getInterfaces(&bAllDefined);
-	if (!bAllDefined)
-	{
-		return false;
-	}
-	for(unsigned int i=0;i<interfaces.size();i++)
-	{
-		LOG_CALL("Linking with interface " << interfaces[i]->class_name);
-		interfaces[i]->linkInterface(target);
-	}
-	return true;
-}
-
 void ABCVm::newClass(call_context* th, int n)
 {
 	int name_index=th->mi->context->instances[n].name;
@@ -2697,8 +2650,8 @@ void ABCVm::newClass(call_context* th, int n)
 	QName className(mname->name_s_id,mname->ns[0].nsNameId);
 
 	Class_inherit* ret = nullptr;
-	auto i = th->mi->context->root->applicationDomain->classesBeingDefined.cbegin();
-	while (i != th->mi->context->root->applicationDomain->classesBeingDefined.cend())
+	auto i = th->mi->context->applicationDomain->classesBeingDefined.cbegin();
+	while (i != th->mi->context->applicationDomain->classesBeingDefined.cend())
 	{
 		if(i->first->name_s_id == mname->name_s_id && (i->first->ns.empty() || mname->ns.empty() || (i->first->ns[0].nsRealId == mname->ns[0].nsRealId)))
 		{
@@ -2712,7 +2665,7 @@ void ABCVm::newClass(call_context* th, int n)
 	if (ret == nullptr)
 	{
 		//Check if this class has been already defined
-		_NR<ApplicationDomain> domain = getCurrentApplicationDomain(th);
+		ApplicationDomain* domain = getCurrentApplicationDomain(th);
 		ASObject* target;
 		asAtom oldDefinition=asAtomHandler::invalidAtom;
 		domain->getVariableAndTargetByMultiname(oldDefinition,*mname, target,th->worker);
@@ -2724,7 +2677,7 @@ void ABCVm::newClass(call_context* th, int n)
 			RUNTIME_STACK_PUSH(th,oldDefinition);
 			// ensure that this interface is linked to all previously defined classes implementing this interface
 			if (th->mi->context->instances[n].isInterface())
-				ABCVm::SetAllClassLinks();
+				th->mi->context->applicationDomain->SetAllClassLinks();
 			return;
 		}
 		MemoryAccount* m = th->sys->allocateMemoryAccount(className.getQualifiedName(th->sys));
@@ -2734,8 +2687,8 @@ void ABCVm::newClass(call_context* th, int n)
 
 		LOG_CALL("add classes defined:"<<*mname<<" "<<th->mi->context);
 		//Add the class to the ones being currently defined in this context
-		th->mi->context->root->applicationDomain->classesBeingDefined.insert(make_pair(mname, ret));
-		th->mi->context->root->customClasses.insert(make_pair(mname->name_s_id,ret));
+		th->mi->context->applicationDomain->classesBeingDefined.insert(make_pair(mname, ret));
+		th->mi->context->applicationDomain->customClasses.insert(make_pair(mname->name_s_id,ret));
 	}
 	ret->isFinal = th->mi->context->instances[n].isFinal();
 	ret->isSealed = th->mi->context->instances[n].isSealed();
@@ -2748,8 +2701,8 @@ void ABCVm::newClass(call_context* th, int n)
 	if(baseClass->getObjectType()==T_NULL && th->mi->context->instances[n].supername)
 	{
 		multiname* mnsuper = th->mi->context->getMultiname(th->mi->context->instances[n].supername,nullptr);
-		auto i = th->mi->context->root->applicationDomain->classesBeingDefined.cbegin();
-		while (i != th->mi->context->root->applicationDomain->classesBeingDefined.cend())
+		auto i = th->mi->context->applicationDomain->classesBeingDefined.cbegin();
+		while (i != th->mi->context->applicationDomain->classesBeingDefined.cend())
 		{
 			if(i->first->name_s_id == mnsuper->name_s_id && i->first->ns[0].nsRealId == mnsuper->ns[0].nsRealId)
 			{
@@ -2775,17 +2728,7 @@ void ABCVm::newClass(call_context* th, int n)
 			LOG(LOG_ERROR,"resetting super class from "<<ret->super->toDebugString() <<" to "<< base->toDebugString());
 			ret->setSuper(_MR(base));
 		}
-		i = th->mi->context->root->applicationDomain->classesBeingDefined.cbegin();
-		while (i != th->mi->context->root->applicationDomain->classesBeingDefined.cend())
-		{
-			if(i->second == base)
-			{
-				th->mi->context->root->applicationDomain->classesSuperNotFilled.push_back(ret);
-				break;
-			}
-			i++;
-		}
-		
+		th->mi->context->applicationDomain->addSuperClassNotFilled(ret);
 	}
 
 	//Add protected namespace if needed
@@ -2794,7 +2737,7 @@ void ABCVm::newClass(call_context* th, int n)
 		ret->use_protected=true;
 		int ns=th->mi->context->instances[n].protectedNs;
 		const namespace_info& ns_info=th->mi->context->constant_pool.namespaces[ns];
-		ret->initializeProtectedNamespace(th->mi->context->getString(ns_info.name),ns_info,th->mi->context->root);
+		ret->initializeProtectedNamespace(th->mi->context->getString(ns_info.name),ns_info,th->mi->context->applicationDomain);
 	}
 
 	IFunction* f = Class<IFunction>::getFunction(ret->getSystemState(),Class_base::_toString);
@@ -2821,8 +2764,9 @@ void ABCVm::newClass(call_context* th, int n)
 	instance_info* cur=&th->mi->context->instances[n];
 	for(unsigned int i=0;i<cur->trait_count;i++)
 	{
-		//int kind=cur->traits[i].kind&0xf;
-		//if(kind==traits_info::Method || kind==traits_info::Setter || kind==traits_info::Getter)
+		// don't build slot traits as they mess up protected namespaces
+		int kind=cur->traits[i].kind&0xf;
+		if(kind==traits_info::Method || kind==traits_info::Setter || kind==traits_info::Getter)
 			th->mi->context->buildTrait(ret,additionalslots,&cur->traits[i],true);
 	}
 	ret->initAdditionalSlots(additionalslots);
@@ -2837,16 +2781,17 @@ void ABCVm::newClass(call_context* th, int n)
 			constructor->validProfName=true;
 		}
 #endif
-		SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(th->worker,constructor,constructor->numArgs());
+		SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(th->worker,constructor,constructor->numArgs()-constructor->numOptions());
 		constructorFunc->setRefConstant();
 		constructorFunc->acquireScope(ret->class_scope);
 		constructorFunc->addToScope(scope_entry(asAtomHandler::fromObject(ret),false));
 		constructorFunc->inClass = ret;
+		constructorFunc->isStatic = true;
 		//add Constructor the the class methods
 		ret->constructor=constructorFunc;
 	}
 	ret->class_index=n;
-	th->mi->context->root->bindClass(className,ret);
+	th->mi->context->applicationDomain->bindClass(className,ret);
 
 	//Add prototype variable
 	ret->prototype = _MNR(new_objectPrototype(ret->getInstanceWorker()));
@@ -2877,24 +2822,11 @@ void ABCVm::newClass(call_context* th, int n)
 			continue;
 
 	}
-	//If the class is not an interface itself, link the traits
-	if(!th->mi->context->instances[n].isInterface())
-	{
-		//Link all the interfaces for this class and all the bases
-		if (!newClassRecursiveLink(ret, ret))
-		{
-			// remember classes where not all interfaces are defined yet
-			ABCVm::AddClassLinks(ret);
-		}
-	}
-	// ensure that this interface is linked to all previously defined classes implementing this interface
-	if (th->mi->context->instances[n].isInterface())
-		ABCVm::SetAllClassLinks();
 	
 	LOG_CALL("Calling Class init " << ret);
 	//Class init functions are called with global as this
 	method_info* m=&th->mi->context->methods[th->mi->context->classes[n].cinit];
-	SyntheticFunction* cinit=Class<IFunction>::getSyntheticFunction(th->worker,m,m->numArgs());
+	SyntheticFunction* cinit=Class<IFunction>::getSyntheticFunction(th->worker,m,m->numArgs()-m->numOptions());
 	cinit->fromNewFunction=true;
 	cinit->inClass = ret;
 	cinit->setRefConstant();
@@ -2911,17 +2843,17 @@ void ABCVm::newClass(call_context* th, int n)
 	{
 		asAtom v = asAtomHandler::fromObject(ret);
 		asAtom f = asAtomHandler::fromObject(cinit);
-		asAtomHandler::callFunction(f,th->worker,ret2,v,nullptr,0,true);
+		asAtomHandler::callFunction(f,th->worker,ret2,v,nullptr,0,true,false,false);
 	}
 	catch(ASObject* exc)
 	{
 		LOG_CALL("Exception during class initialization. Returning Undefined");
 		//Handle eventual exceptions from the constructor, to fix the stack
-		RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(th->mi->context->root->applicationDomain->getSystemState()->getUndefinedRef()));
+		RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(th->mi->context->applicationDomain->getSystemState()->getUndefinedRef()));
 		cinit->decRef();
 
 		//Remove the class to the ones being currently defined in this context
-		th->mi->context->root->applicationDomain->classesBeingDefined.erase(mname);
+		th->mi->context->applicationDomain->classesBeingDefined.erase(mname);
 		throw;
 	}
 	assert_and_throw(asAtomHandler::isUndefined(ret2));
@@ -2931,22 +2863,26 @@ void ABCVm::newClass(call_context* th, int n)
 	cinit->decRef();
 	if (ret->getGlobalScope()) // the variable on the Definition Object was set to null in class definition, but can be set to the real object now that the class init function was called
 		ret->getGlobalScope()->setVariableByQName(mname->name_s_id,mname->ns[0], ret,DECLARED_TRAIT);
-	th->mi->context->root->bindClass(className,ret);
-
-	auto j = th->mi->context->root->applicationDomain->classesSuperNotFilled.begin();
-	while (j != th->mi->context->root->applicationDomain->classesSuperNotFilled.end())
+	th->mi->context->applicationDomain->bindClass(className,ret);
+	
+	th->mi->context->applicationDomain->copyBorrowedTraitsFromSuper(ret);
+	
+	//If the class is not an interface itself and has no super class, link the traits here (if it has a super class, the traits are linked in copyBorrowedTraitsFromSuper
+	if(ret->super.isNull() && !th->mi->context->instances[n].isInterface())
 	{
-		if((*j)->super == ret)
+		//Link all the interfaces for this class and all the bases
+		if (!th->mi->context->applicationDomain->newClassRecursiveLink(ret, ret))
 		{
-			(*j)->copyBorrowedTraitsFromSuper();
-			j = th->mi->context->root->applicationDomain->classesSuperNotFilled.erase(j);
+			// remember classes where not all interfaces are defined yet
+			th->mi->context->applicationDomain->AddClassLinks(ret);
 		}
-		else
-			j++;
 	}
+	// ensure that this interface is linked to all previously defined classes implementing this interface
+	if (th->mi->context->instances[n].isInterface())
+		th->mi->context->applicationDomain->SetAllClassLinks();
 	ret->setConstructIndicator();
 	//Remove the class to the ones being currently defined in this context
-	th->mi->context->root->applicationDomain->classesBeingDefined.erase(mname);
+	th->mi->context->applicationDomain->classesBeingDefined.erase(mname);
 }
 
 void ABCVm::swap()
@@ -2956,7 +2892,6 @@ void ABCVm::swap()
 
 ASObject* ABCVm::newActivation(call_context* th, method_info* mi)
 {
-	LOG_CALL("newActivation");
 	//TODO: Should method traits be added to the activation context?
 	ASObject* act= nullptr;
 	ASObject* caller = asAtomHandler::getObject(th->locals[0]);
@@ -2975,6 +2910,9 @@ ASObject* ABCVm::newActivation(call_context* th, method_info* mi)
 #ifndef NDEBUG
 	act->initialized=true;
 #endif
+	if (caller)
+		caller->addOwnedObject(act);
+	LOG_CALL("newActivation:"<<act->toDebugString());
 	return act;
 }
 
@@ -3072,11 +3010,11 @@ void ABCVm::callImpl(call_context* th, asAtom& f, asAtom& obj, asAtom* args, int
 bool ABCVm::deleteProperty(ASObject* obj, multiname* name)
 {
 	LOG_CALL("deleteProperty " << *name<<" "<<obj->toDebugString());
-	if (name->name_type == multiname::NAME_OBJECT && name->name_o)
+	if (name->name_type == multiname::NAME_OBJECT && asAtomHandler::isValid(name->name_o))
 	{
-		if (name->name_o->is<XMLList>())
+		if (asAtomHandler::is<XMLList>(name->name_o))
 		{
-			createError<TypeError>(getWorker(),kDeleteTypeError,name->name_o->getClassName());
+			createError<TypeError>(getWorker(),kDeleteTypeError,asAtomHandler::getObjectNoCheck(name->name_o)->getClassName());
 			name->resetNameIfObject();
 			return false;
 		}
@@ -3084,6 +3022,7 @@ bool ABCVm::deleteProperty(ASObject* obj, multiname* name)
 	bool ret = obj->deleteVariableByMultiname(*name,obj->getInstanceWorker());
 
 	obj->decRef();
+	name->resetNameIfObject();
 	return ret;
 }
 
@@ -3092,7 +3031,7 @@ ASObject* ABCVm::newFunction(call_context* th, int n)
 	LOG_CALL("newFunction " << n);
 
 	method_info* m=&th->mi->context->methods[n];
-	SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(th->worker,m,m->numArgs());
+	SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(th->worker,m,m->numArgs()-m->numOptions());
 	f->func_scope = _R<scope_entry_list>(new scope_entry_list());
 	f->fromNewFunction=true;
 	if (th->parent_scope_stack)
@@ -3120,6 +3059,7 @@ ASObject* ABCVm::newFunction(call_context* th, int n)
 	}
 	//Create the prototype object
 	f->prototype = _MR(new_asobject(th->worker));
+	f->prototype->addStoredMember();
 	f->prototype->setVariableAtomByQName(BUILTIN_STRINGS::STRING_CONSTRUCTOR,nsNameAndKind(),asAtomHandler::fromObject(f),DECLARED_TRAIT,true,false);
 	return f;
 }
@@ -3141,7 +3081,7 @@ ASObject* ABCVm::pushString(call_context* th, int n)
 
 ASObject* ABCVm::newCatch(call_context* th, int n)
 {
-	ASObject* catchScope = Class<ASObject>::getInstanceS(th->worker);
+	ASObject* catchScope = new_asobject(th->worker);
 	assert_and_throw(n >= 0 && (unsigned int)n < th->mi->body->exceptions.size());
 	multiname* name = th->mi->context->getMultiname(th->mi->body->exceptions[n].var_name, nullptr);
 	catchScope->setVariableByMultiname(*name, asAtomHandler::undefinedAtom,ASObject::CONST_NOT_ALLOWED,nullptr,th->worker);
@@ -3152,6 +3092,7 @@ ASObject* ABCVm::newCatch(call_context* th, int n)
 
 void ABCVm::newArray(call_context* th, int n)
 {
+	th->explicitConstruction = true;
 	LOG_CALL( "newArray " << n );
 	Array* ret=Class<Array>::getInstanceSNoArgs(th->worker);
 	ret->resize(n);
@@ -3162,6 +3103,7 @@ void ABCVm::newArray(call_context* th, int n)
 	}
 
 	RUNTIME_STACK_PUSH(th,asAtomHandler::fromObject(ret));
+	th->explicitConstruction = false;
 }
 
 ASObject* ABCVm::esc_xattr(ASObject* o)

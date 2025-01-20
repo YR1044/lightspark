@@ -23,13 +23,20 @@
 #include <cstdlib>
 #include "logger.h"
 #include <unistd.h>
+#include "utils/timespec.h"
 
 #ifdef _WIN32
+#	include <winsdkver.h>
 #	ifndef NOMINMAX
 #		define NOMINMAX
 #	endif
 #	define WIN32_LEAN_AND_MEAN
+#	define WINVER _WIN32_WINNT_VISTA
+#	define _WIN32_WINNT _WIN32_WINNT_VISTA
 #	include <windows.h>
+#	include <winnt.h> // for Nt{Set,Query}TimerResolution()
+#	include <synchapi.h> // for `CreateWaitableTimerEx()`
+#	include <versionhelpers.h> // for `IsWindowsVistaOrGreater()`
 #	undef DOUBLE_CLICK
 #	undef RGB
 #	undef VOID
@@ -41,17 +48,65 @@
 #else
 #include <unistd.h> // for usleep
 #endif
+#ifndef _WIN32
+#include <errno.h> // for errno
+#endif
 
 using namespace std;
+using namespace lightspark;
 
-uint64_t compat_msectiming()
+uint64_t compat_perfcount()
 {
 #ifdef _WIN32
-	return GetTickCount(); //TODO: use GetTickCount64
+	LARGE_INTEGER counter;
+	(void)QueryPerformanceCounter(&counter);
+	return (uint64_t)counter.QuadPart;
 #else
 	timespec t;
 	clock_gettime(CLOCK_MONOTONIC,&t);
-	return (t.tv_sec*1000 + t.tv_nsec/1000000);
+	return (t.tv_sec*1000000000 + t.tv_nsec);
+#endif
+}
+
+uint64_t compat_perffreq()
+{
+#ifdef _WIN32
+	LARGE_INTEGER frequency;
+	(void)QueryPerformanceFrequency(&frequency);
+	return (uint64_t)frequency.QuadPart;
+#else
+	return 1000000000;
+#endif
+}
+
+uint64_t compat_msectiming()
+{
+	return compat_now().toMs();
+}
+
+uint64_t compat_usectiming()
+{
+	return compat_now().toUs();
+}
+
+uint64_t compat_nsectiming()
+{
+	return compat_now().toNs();
+}
+
+TimeSpec compat_now()
+{
+#ifdef _WIN32
+	// Based on the Windows version of Rust's `Instant::now()`.
+	uint64_t counter = compat_perfcount();
+	uint64_t frequency = compat_perffreq();
+	const uint64_t q = counter / frequency;
+	const uint64_t r = counter % frequency;
+	return TimeSpec(q, r * TimeSpec::nsPerSec / frequency);
+#else
+	timespec t;
+	clock_gettime(CLOCK_MONOTONIC,&t);
+	return TimeSpec(t.tv_sec, t.tv_nsec);
 #endif
 }
 
@@ -66,17 +121,120 @@ int kill_child(GPid childPid)
 	return 0;
 }
 
+#ifdef WIN32
+// Based on code from https://github.com/TurtleMan64/usleep-windows
+static void initTimerRes()
+{
+	static int init = 0;
+
+	if (init == 0)
+	{
+		init = 1;
+
+		// Increase the accuracy of the timer once.
+		const HINSTANCE ntdll = LoadLibrary("ntdll.dll");
+		if (ntdll != NULL)
+		{
+			typedef long(NTAPI* pNtQueryTimerResolution)(unsigned long* MinimumResolution, unsigned long* MaximumResolution, unsigned long* CurrentResolution);
+			typedef long(NTAPI* pNtSetTimerResolution)(unsigned long RequestedResolution, char SetResolution, unsigned long* ActualResolution);
+
+			pNtQueryTimerResolution NtQueryTimerResolution = (pNtQueryTimerResolution)(void*)GetProcAddress(ntdll, "NtQueryTimerResolution");
+			pNtSetTimerResolution NtSetTimerResolution = (pNtSetTimerResolution)(void*)GetProcAddress(ntdll, "NtSetTimerResolution");
+			if (NtQueryTimerResolution != nullptr && NtSetTimerResolution != nullptr)
+			{
+				// Query for the highest accuracy timer resolution.
+				unsigned long minimum, maximum, current;
+				NtQueryTimerResolution(&minimum, &maximum, &current);
+
+				// Set the timer resolution to the highest.
+				NtSetTimerResolution(maximum, (char)1, &current);
+			}
+
+			// We can decrement the internal reference count by one
+			// and NTDLL.DLL still remains loaded in the process.
+			FreeLibrary(ntdll);
+		}
+	}
+}
+#endif
+
 void compat_msleep(unsigned int time)
 {
 #ifdef WIN32
 	Sleep(time);
 #elif _POSIX_C_SOURCE >= 199309L
 	struct timespec ts;
+	struct timespec rem;
 	ts.tv_sec = time / 1000;
 	ts.tv_nsec = (time % 1000) * 1000000;
-	nanosleep(&ts, NULL);
+	int rc;
+	do
+	{
+		rc = nanosleep(&ts, &rem);
+		ts = rem;
+	} while (rc && errno == EINTR);
 #else
 	usleep(time * 1000);
+#endif
+}
+
+void compat_usleep(uint64_t us)
+{
+#ifdef WIN32
+	LARGE_INTEGER period;
+	initTimerRes();
+	period.QuadPart = -us*10;
+	HANDLE timer;
+	if (IsWindowsVistaOrGreater())
+		timer = CreateWaitableTimerEx(NULL, NULL, 2, TIMER_ALL_ACCESS);
+	else
+		timer = CreateWaitableTimer(NULL, false, NULL);
+	SetWaitableTimer(timer, &period, 0, NULL, NULL, false);
+	WaitForSingleObject(timer, INFINITE);
+	CloseHandle(timer);
+#elif _POSIX_C_SOURCE >= 199309L
+	struct timespec ts;
+	struct timespec rem;
+	ts.tv_sec = us / 1000000;
+	ts.tv_nsec = (us % 1000000) * 1000;
+	int rc;
+	do
+	{
+		rc = nanosleep(&ts, &rem);
+		ts = rem;
+	} while (rc && errno == EINTR);
+#else
+	usleep(us);
+#endif
+}
+
+void compat_nsleep(uint64_t ns)
+{
+#ifdef WIN32
+	LARGE_INTEGER period;
+	initTimerRes();
+	period.QuadPart = -ns/100;
+	HANDLE timer;
+	if (IsWindowsVistaOrGreater())
+		timer = CreateWaitableTimerEx(NULL, NULL, 2, TIMER_ALL_ACCESS);
+	else
+		timer = CreateWaitableTimer(NULL, false, NULL);
+	SetWaitableTimer(timer, &period, 0, NULL, NULL, false);
+	WaitForSingleObject(timer, INFINITE);
+	CloseHandle(timer);
+#elif _POSIX_C_SOURCE >= 199309L
+	struct timespec ts;
+	struct timespec rem;
+	ts.tv_sec = ns / 1000000000;
+	ts.tv_nsec = (ns % 1000000000);
+	int rc;
+	do
+	{
+		rc = nanosleep(&ts, &rem);
+		ts = rem;
+	} while (rc && errno == EINTR);
+#else
+	usleep(ns/1000);
 #endif
 }
 
@@ -134,7 +292,7 @@ uint64_t compat_get_thread_cputime_us()
 /* If we are run from standalone, g_hinstance stays NULL.
  * In the plugin, DLLMain sets it to the dll's instance.
  */
-HINSTANCE g_hinstance = NULL;
+DLL_PUBLIC HINSTANCE g_hinstance = NULL;
 #define DEFDLLMAIN(x) extern "C" BOOL WINAPI x##_DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 DEFDLLMAIN(gio);
 DEFDLLMAIN(glib);
@@ -149,7 +307,7 @@ extern "C"
 BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
 	//RUNDLLMAIN(gio); //taken care of by patches from mxe
-	RUNDLLMAIN(glib);
+	//RUNDLLMAIN(glib); //taken care of by patches from mxe
 	//RUNDLLMAIN(cairo); //taken care of by patches from mxe
 	//RUNDLLMAIN(atk); //taken care of by patches from mxe
 	//RUNDLLMAIN(pango); //taken care of by patches from mxe

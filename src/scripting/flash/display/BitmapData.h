@@ -35,10 +35,13 @@ class BitmapData: public ASObject, public IBitmapDrawable
 private:
 	_NR<BitmapContainer> pixels;
 	int locked;
+	bool needsupload;
+	bool transparent;
 	//Avoid cycles by not using automatic references
 	//Bitmap will take care of removing itself when needed
 	std::set<Bitmap*> users;
-	void notifyUsers() const;
+	void notifyUsers();
+	bool checkDisposed(asAtom& ret);
 public:
 	BitmapData(ASWorker* wrk,Class_base* c);
 	BitmapData(ASWorker* wrk,Class_base* c, _R<BitmapContainer> b);
@@ -49,29 +52,32 @@ public:
 	void finalize() override;
 	void prepareShutdown() override;
 	_NR<BitmapContainer> getBitmapContainer() const { return pixels; }
-	int getWidth() const { return pixels->getWidth(); }
-	int getHeight() const { return pixels->getHeight(); }
+	int getWidth() const { return !pixels.isNull() ? pixels->getWidth() : 0; }
+	int getHeight() const { return !pixels.isNull() ? pixels->getHeight() : 0; }
 	void addUser(Bitmap* b, bool startupload=true);
 	void removeUser(Bitmap* b);
+	void checkForUpload();
 	/*
 	 * Utility method to draw a DisplayObject on the surface
 	 */
-	void drawDisplayObject(DisplayObject* d, const MATRIX& initialMatrix, bool smoothing, bool forCachedBitmap);
-	ASPROPERTY_GETTER(bool, transparent);
+	void drawDisplayObject(DisplayObject* d, const MATRIX& initialMatrix, bool smoothing, AS_BLENDMODE blendMode, ColorTransformBase* ct);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(dispose);
 	ASFUNCTION_ATOM(draw);
+	ASFUNCTION_ATOM(drawWithQuality);
 	ASFUNCTION_ATOM(getPixel);
 	ASFUNCTION_ATOM(getPixel32);
 	ASFUNCTION_ATOM(setPixel);
 	ASFUNCTION_ATOM(setPixel32);
 	ASFUNCTION_ATOM(getRect);
 	ASFUNCTION_ATOM(copyPixels);
+	ASFUNCTION_ATOM(copyPixelsToByteArray);
 	ASFUNCTION_ATOM(fillRect);
 	ASFUNCTION_ATOM(generateFilterRect);
 	ASFUNCTION_ATOM(hitTest);
 	ASFUNCTION_ATOM(_getWidth);
 	ASFUNCTION_ATOM(_getHeight);
+	ASFUNCTION_ATOM(_getTransparent);
 	ASFUNCTION_ATOM(scroll);
 	ASFUNCTION_ATOM(clone);
 	ASFUNCTION_ATOM(copyChannel);
@@ -92,6 +98,7 @@ public:
 	ASFUNCTION_ATOM(threshold);
 	ASFUNCTION_ATOM(merge);
 	ASFUNCTION_ATOM(paletteMap);
+	ASFUNCTION_ATOM(pixelDissolve);
 };
 
 }

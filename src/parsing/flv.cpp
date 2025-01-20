@@ -20,10 +20,10 @@
 #include "parsing/flv.h"
 #include "swftypes.h"
 #include "compat.h"
+#include "backends/netutils.h"
 #include "scripting/flash/net/flashnet.h"
 #include "scripting/flash/utils/ByteArray.h"
 #include "scripting/class.h"
-#include "scripting/toplevel/toplevel.h"
 #include "amf3_generator.h"
 
 using namespace lightspark;
@@ -88,6 +88,14 @@ VideoTag::VideoTag(istream& s)
 	UI24_FLV StreamID;
 	s >> StreamID;
 	assert_and_throw(StreamID==0);
+}
+
+ScriptDataTag::~ScriptDataTag()
+{
+	for (auto it = dataobjectlist.begin(); it != dataobjectlist.end(); it++)
+	{
+		ASATOM_DECREF(*it);
+	}
 }
 
 ScriptDataTag::ScriptDataTag(istream& s):VideoTag(s)

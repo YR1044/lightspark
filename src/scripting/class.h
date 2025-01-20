@@ -17,14 +17,16 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#ifndef SCRIPTING_CLASS_H
+#define SCRIPTING_CLASS_H 1
+
 #include "compat.h"
 #include "asobject.h"
 #include "swf.h"
-#include "scripting/toplevel/toplevel.h"
+#include "scripting/toplevel/Class_base.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "backends/streamcache.h"
 
-#ifndef SCRIPTING_CLASS_H
-#define SCRIPTING_CLASS_H 1
 
 namespace lightspark
 {
@@ -39,6 +41,7 @@ public:
 	static const char* ns;
 	static const char* name;
 	static uint32_t id;
+	static bool isAVM1;
 };
 
 class Class_inherit:public Class_base
@@ -55,18 +58,7 @@ private:
 	asfreelist freelist;
 public:
 	Class_inherit(const QName& name, MemoryAccount* m,const traits_info* _classtrait, Global* _global);
-	bool checkScriptInit()
-	{
-		if (global)
-		{
-			if (inScriptInit)
-				return false;
-			inScriptInit=true;
-			global->checkScriptInit();
-			inScriptInit=false;
-		}
-		return true;
-	}
+	bool checkScriptInit();
 	bool destruct() override
 	{
 		instancefactory.reset();
@@ -87,7 +79,7 @@ public:
 	{
 		return &freelist;
 	}
-	
+
 	void buildInstanceTraits(ASObject* o) const override;
 	void setupDeclaredTraits(ASObject *target, bool checkclone=true) override;
 	void bindToTag(DictionaryTag* t)
@@ -113,6 +105,7 @@ public:
 	bool hasoverriddenmethod(multiname* name) const override;
 	GET_VARIABLE_RESULT getVariableByMultiname(asAtom& ret, const multiname& name, GET_VARIABLE_OPTION opt, ASWorker* wrk) override;
 	variable* findVariableByMultiname(const multiname& name, Class_base* cls, uint32_t* nsRealID, bool* isborrowed, bool considerdynamic, ASWorker* wrk) override;
+	multiname* setVariableByMultiname(multiname& name, asAtom& o, CONST_ALLOWED_FLAG allowConst, bool* alreadyset, ASWorker* wrk) override;
 	std::string toDebugString() const override;
 };
 
@@ -178,7 +171,7 @@ protected:
 		ret = asAtomHandler::fromObject(o);
 		asAtomHandler::resetCached(ret);
 		if(construct)
-			handleConstruction(ret,args,argslen,true);
+			handleConstruction(ret,args,argslen,true,worker->isExplicitlyConstructed());
 	}
 public:
 	template<typename... Args>
@@ -231,6 +224,8 @@ public:
 			T::sinit(ret);
 
 			ret->initStandardProps();
+			if (ClassName<T>::isAVM1)
+				ret->AVM1initPrototype();
 		}
 		else
 			ret=static_cast<Class<T>*>(*retAddr);
@@ -259,7 +254,7 @@ public:
 	{
 		T::generator(ret,wrk, asAtomHandler::invalidAtom, args, argslen);
 	}
-	bool coerce(ASWorker* wrk,asAtom& o) const override
+	bool coerce(ASWorker* wrk,asAtom& o) override
 	{
 		return Class_base::coerce(wrk,o);
 	}
@@ -269,7 +264,7 @@ template<>
 void Class<Global>::getInstance(ASWorker* worker,asAtom& ret, bool construct, asAtom* args, const unsigned int argslen, Class_base* realClass);
 
 template<>
-inline bool Class<Number>::coerce(ASWorker* wrk,asAtom& o) const
+inline bool Class<Number>::coerce(ASWorker* wrk,asAtom& o)
 {
 	if (asAtomHandler::isNumeric(o))
 		return false;
@@ -279,7 +274,7 @@ inline bool Class<Number>::coerce(ASWorker* wrk,asAtom& o) const
 }
 
 template<>
-inline bool Class<UInteger>::coerce(ASWorker* wrk,asAtom& o) const
+inline bool Class<UInteger>::coerce(ASWorker* wrk,asAtom& o)
 {
 	if (asAtomHandler::isUInteger(o))
 		return false;
@@ -289,7 +284,7 @@ inline bool Class<UInteger>::coerce(ASWorker* wrk,asAtom& o) const
 }
 
 template<>
-inline bool Class<Integer>::coerce(ASWorker* wrk,asAtom& o) const
+inline bool Class<Integer>::coerce(ASWorker* wrk,asAtom& o)
 {
 	if (asAtomHandler::isInteger(o))
 		return false;
@@ -299,7 +294,7 @@ inline bool Class<Integer>::coerce(ASWorker* wrk,asAtom& o) const
 }
 
 template<>
-inline bool Class<Boolean>::coerce(ASWorker* wrk,asAtom& o) const
+inline bool Class<Boolean>::coerce(ASWorker* wrk,asAtom& o)
 {
 	if (asAtomHandler::isBool(o))
 		return false;
@@ -320,7 +315,7 @@ template<>
 class Class<ASObject>: public Class_base
 {
 private:
-	Class<ASObject>(const QName& name,uint32_t classID, MemoryAccount* m):Class_base(name, classID,m){}
+	Class(const QName& name,uint32_t classID, MemoryAccount* m):Class_base(name, classID,m){}
 	//This function is instantiated always because of inheritance
 	void getInstance(ASWorker* worker,asAtom& ret, bool construct, asAtom* args, const unsigned int argslen, Class_base* realClass=nullptr);
 public:
@@ -353,10 +348,13 @@ public:
 	{
 		ASObject::buildTraits(o);
 	}
+	void AVM1generator(ASWorker* wrk,asAtom& ret, asAtom* args, const unsigned int argslen);
 	void generator(ASWorker* wrk,asAtom& ret, asAtom* args, const unsigned int argslen)
 	{
-		if(argslen==0 || asAtomHandler::is<Null>(args[0]) || asAtomHandler::is<Undefined>(args[0]))
-			ret=asAtomHandler::fromObject(Class<ASObject>::getInstanceS(wrk));
+		if (!wrk->needsActionScript3())
+			AVM1generator(wrk, ret, args, argslen);
+		else if (argslen==0 || asAtomHandler::is<Null>(args[0]) || asAtomHandler::is<Undefined>(args[0]))
+			ret=asAtomHandler::fromObject(new_asobject(wrk));
 		else
 		{
 			ASATOM_INCREF(args[0]);

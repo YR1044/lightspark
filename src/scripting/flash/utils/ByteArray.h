@@ -45,6 +45,8 @@ protected:
 	uint32_t len;
 	void compress_zlib(bool raw);
 	void uncompress_zlib(bool raw);
+	void compress_lzma();
+	void uncompress_lzma();
 	Mutex mutex;
 	uint8_t* getBufferIntern(unsigned int size, bool enableResize);
 public:
@@ -147,6 +149,7 @@ public:
 	}
 	
 	void append(std::streambuf* data, int length);
+	void append(uint8_t* data, int length);
 	/**
 	 * @brief remove bytes from front of buffer
 	 * @param count number of bytes to remove

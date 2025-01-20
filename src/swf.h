@@ -20,31 +20,44 @@
 #ifndef SWF_H
 #define SWF_H 1
 
+#include "asobject.h"
+#include "forwards/events.h"
+#include "forwards/scripting/flash/text/flashtext.h"
+#include "interfaces/logger.h"
+#include "interfaces/threading.h"
+#include "interfaces/timer.h"
+#include "utils/optional.h"
+#include "utils/timespec.h"
+#include "backends/graphics.h"
+#include "backends/urlutils.h"
+#include "timer.h"
+#include "threading.h"
 #include "compat.h"
 #include <fstream>
 #include <list>
 #include <queue>
 #include <map>
 #include <unordered_set>
+#include <unordered_map>
 #include <string>
 #include "swftypes.h"
-#include "scripting/flash/display/flashdisplay.h"
-#include "timer.h"
 #include "memory_support.h"
+#include "scripting/abcutils.h"
+
+using namespace std;
 
 class uncompressing_filter;
 
 namespace lightspark
 {
 
-class ABCVm;
 class AudioManager;
 class Config;
 class ControlTag;
-class DownloadManager;
 class DisplayListTag;
 class DictionaryTag;
 class DefineScalingGridTag;
+class EventLoop;
 class ExtScriptObject;
 class InputThread;
 class IntervalManager;
@@ -54,120 +67,32 @@ class RenderThread;
 class SecurityManager;
 class LocaleManager;
 class CurrencyManager;
+class DownloadManager;
 class Tag;
-class ApplicationDomain;
-class ASWorker;
-class WorkerDomain;
-class SecurityDomain;
 class Class_inherit;
 class FontTag;
 class SoundTransform;
 class ASFile;
 class EngineData;
+class NativeApplication;
+class RootMovieClip;
+class Null;
+class Undefined;
+class Boolean;
+class Class_base;
+class ThreadPool;
+class TimerThread;
+class LocalConnectionEvent;
+class ABCVm;
+class Function;
 
-class RootMovieClip: public MovieClip
+enum class FramePhase
 {
-friend class ParseThread;
-protected:
-	URLInfo origin;
-private:
-	bool parsingIsFailed;
-	bool waitingforparser;
-	RGB Background;
-	Mutex dictSpinlock;
-	std::unordered_map < uint32_t, DictionaryTag* > dictionary;
-	Mutex scalinggridsmutex;
-	std::unordered_map < uint32_t, RECT > scalinggrids;
-	std::map < QName, DictionaryTag* > classesToBeBound;
-	std::map < tiny_string,FontTag* > embeddedfonts;
-	std::map < uint32_t,FontTag* > embeddedfontsByID;
-
-	//frameSize and frameRate are valid only after the header has been parsed
-	RECT frameSize;
-	float frameRate;
-	URLInfo baseURL;
-	/* those are private because you shouldn't call mainClip->*,
-	 * but mainClip->getStage()->* instead.
-	 */
-	void initFrame() override;
-	void advanceFrame() override;
-	void executeFrameScript() override;
-	ACQUIRE_RELEASE_FLAG(finishedLoading);
-	
-	unordered_map<uint32_t,_NR<IFunction>> avm1ClassConstructors;
-	unordered_map<uint32_t,AVM1InitActionTag*> avm1InitActionTags;
-public:
-	RootMovieClip(ASWorker* wrk,_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c);
-	~RootMovieClip();
-	void destroyTags();
-	bool destruct() override;
-	void finalize() override;
-	void prepareShutdown() override;
-	bool hasFinishedLoading() override { return ACQUIRE_READ(finishedLoading); }
-	bool isWaitingForParser() { return waitingforparser; }
-	void constructionComplete() override;
-	void afterConstruction() override;
-	bool needsActionScript3() const override { return this->usesActionScript3;}
-	ParseThread* parsethread;
-	uint32_t version;
-	uint32_t fileLength;
-	bool hasSymbolClass;
-	bool hasMainClass;
-	bool usesActionScript3;
-	RGB getBackground();
-	void setBackground(const RGB& bg);
-	void setFrameSize(const RECT& f);
-	RECT getFrameSize() const;
-	float getFrameRate() const;
-	void setFrameRate(float f);
-	void addToDictionary(DictionaryTag* r);
-	DictionaryTag* dictionaryLookup(int id);
-	DictionaryTag* dictionaryLookupByName(uint32_t nameID);
-	void addToScalingGrids(const DefineScalingGridTag* r);
-	RECT* ScalingGridsLookup(int id);
-	void resizeCompleted();
-	void labelCurrentFrame(const STRING& name);
-	void commitFrame(bool another);
-	void revertFrame();
-	void parsingFailed();
-	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) override;
-	void DLL_PUBLIC setOrigin(const tiny_string& u, const tiny_string& filename="");
-	URLInfo& getOrigin() { return origin; }
-	void DLL_PUBLIC setBaseURL(const tiny_string& url);
-	const URLInfo& getBaseURL();
-	static RootMovieClip* getInstance(ASWorker* wrk, _NR<LoaderInfo> li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain);
-	/*
-	 * The application domain for this clip
-	 */
-	_NR<ApplicationDomain> applicationDomain;
-	/*
-	 * The security domain for this clip
-	 */
-	_NR<SecurityDomain> securityDomain;
-	//map of all classed defined in the swf. They own one reference to each class/template
-	//key is the stringID of the class name (without namespace)
-	std::multimap<uint32_t, Class_base*> customClasses;
-	/*
-	 * Support for class aliases in AMF3 serialization
-	 */
-	std::map<tiny_string, _R<Class_base> > aliasMap;
-	std::map<QName,std::unordered_set<uint32_t>*> customclassoverriddenmethods;
-	std::map<QName, Template_base*> templates;
-	//DisplayObject interface
-	_NR<RootMovieClip> getRoot() override;
-	_NR<Stage> getStage() override;
-	void addBinding(const tiny_string& name, DictionaryTag *tag);
-	void bindClass(const QName &classname, Class_inherit* cls);
-	void checkBinding(DictionaryTag* tag);
-	void registerEmbeddedFont(const tiny_string fontname, FontTag *tag);
-	FontTag* getEmbeddedFont(const tiny_string fontname) const;
-	FontTag* getEmbeddedFontByID(uint32_t fontID) const;
-	void setupAVM1RootMovie();
-	// map AVM1 class constructors to named tags
-	bool AVM1registerTagClass(const tiny_string& name, _NR<IFunction> theClassConstructor);
-	AVM1Function* AVM1getClassConstructor(uint32_t spriteID);
-	void AVM1registerInitActionTag(uint32_t spriteID, AVM1InitActionTag* tag);
-	void AVM1checkInitActions(MovieClip *sprite);
+	ADVANCE_FRAME,
+	INIT_FRAME,
+	EXECUTE_FRAMESCRIPT,
+	EXIT_FRAME,
+	IDLE
 };
 
 class ThreadProfile
@@ -197,27 +122,32 @@ public:
 	void plot(uint32_t max, cairo_t *cr);
 };
 
-class SystemState: public ITickJob, public InvalidateQueue
+class DLL_PUBLIC SystemState: public ITickJob, public InvalidateQueue
 {
 private:
-	class EngineCreator: public IThreadJob
-	{
-	public:
-		void execute();
-		void threadAbort();
-		void jobFence() { delete this; }
-	};
-	friend class SystemState::EngineCreator;
 	ThreadPool* threadPool;
 	ThreadPool* downloadThreadPool;
+	LSTimers timers;
+	Optional<TimeSpec> _timeUntilNextTick;
+	TimeSpec frameAccumulator;
+	std::list<TimeSpec> recentFrameTimings;
 	TimerThread* timerThread;
 	TimerThread* frameTimerThread;
+	EventLoop* eventLoop;
+	ITime* time;
+	Optional<ILogger&> logger;
 	Semaphore terminated;
 	float renderRate;
 	bool error;
 	bool shutdown;
 	bool firsttick;
 	bool localstorageallowed;
+	bool influshing;
+	bool inMouseEvent;
+	bool inWindowMove;
+	bool hasExitCode;
+	int innerGotoCount;
+	int exitCode;
 	RenderThread* renderThread;
 	InputThread* inputThread;
 	EngineData* engineData;
@@ -302,11 +232,17 @@ private:
 	mutable Mutex memoryAccountsMutex;
 	std::list<MemoryAccount> memoryAccounts;
 #endif
+	mutable Mutex fontListMutex;
+	// TODO: Make this a map, once we support proper HTML formatting.
+	// A global list of all fonts registered via the AS3 API
+	// `Font.registerFont()`.
+	std::vector<ASFont*> globalEmbeddedFontList;
+
 	/*
 	 * Pooling support
 	 */
 	mutable Mutex poolMutex;
-	map<tiny_string, uint32_t> uniqueStringMap;
+	unordered_map<tiny_string, uint32_t> uniqueStringMap;
 	vector<tiny_string> uniqueStringIDMap;
 	uint32_t lastUsedStringId;
 	map<nsNameAndKindImpl, uint32_t> uniqueNamespaceImplMap;
@@ -319,9 +255,13 @@ private:
 	void systemFinalize();
 	std::map<tiny_string, Class_base *> classnamemap;
 	unordered_set<DisplayObject*> listResetParent;
+	Mutex mutexLocalConnection;
+	std::map<uint32_t, _NR<ASObject>> localconnection_client_map;
+	ACQUIRE_RELEASE_VARIABLE(FramePhase, framePhase);
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 	tiny_string getDumpedSWFPath() const { return dumpedSWFPath;}
+	void waitThreadpool();
 
 	//Interative analysis flags
 	bool showProfilingData;
@@ -329,10 +269,11 @@ public:
 	bool allowFullscreen;
 	bool allowFullscreenInteractive;
 	//Flash for execution mode
-	enum FLASH_MODE { FLASH=0, AIR, AVMPLUS };
+	enum FLASH_MODE { FLASH=0, AIR };
 	const FLASH_MODE flashMode;
 	uint32_t swffilesize;
 	asAtom nanAtom;
+	ATOMIC_INT32(instanceCounter); // used to create unique instanceX names for AVM1
 	// the global object for AVM1
 	Global* avm1global;
 	void setupAVM1();
@@ -349,19 +290,59 @@ public:
 	bool isShuttingDown() const DLL_PUBLIC;
 	bool isOnError() const DLL_PUBLIC;
 	void setShutdownFlag() DLL_PUBLIC;
+	void setExitCode(int exitcode) DLL_PUBLIC;
+	int getExitCode() DLL_PUBLIC;
+	void setInMouseEvent(bool inmouseevent);
+	bool getInMouseEvent() const;
+	void setWindowMoveMode(bool startmove);
+	bool getInWindowMoveMode() const;
 	void signalTerminated();
 	std::map<tiny_string, _R<SharedObject> > sharedobjectmap;
 	bool localStorageAllowed() const { return localstorageallowed; }
 	void setLocalStorageAllowed(bool allowed);
+	bool inInnerGoto() const { return innerGotoCount;}
+	void runInnerGotoFrame(DisplayObject* innerClip, const std::vector<_R<DisplayObject>>& removedFrameScripts = {});
+
+	void trace(const tiny_string& str);
+	Optional<ILogger&> getLogger() { return logger; }
+
+	uint64_t getCurrentTime_ms() const { return time->getCurrentTime_ms(); }
+	uint64_t getCurrentTime_us() const { return time->getCurrentTime_us(); }
+	uint64_t getCurrentTime_ns() const { return time->getCurrentTime_ns(); }
+	TimeSpec now() const { return time->now(); }
+	void sleep_ms(uint32_t ms) { return time->sleep_ms(ms); }
+	void sleep_us(uint32_t us) { return time->sleep_us(us); }
+	void sleep_ns(uint64_t ns) { return time->sleep_ns(ns); }
+
+	size_t maxFramesPerTick() const;
+	void addFrameTiming(const TimeSpec& elapsed);
+	void runTick(const TimeSpec& delta);
+	TimeSpec timeUntilNextFrame() const;
 	void tick() override;
 	void tickFence() override;
+
 	RenderThread* getRenderThread() const { return renderThread; }
 	InputThread* getInputThread() const { return inputThread; }
 	void setParamsAndEngine(EngineData* e, bool s) DLL_PUBLIC;
 	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
 	void needsAVM2(bool n);
 	void stageCoordinateMapping(uint32_t windowWidth, uint32_t windowHeight, int& offsetX, int& offsetY, float& scaleX, float& scaleY);
+	void stageCoordinateMapping(const Vector2& windowSize, Vector2& offset, Vector2f& scale);
+	Vector2f windowToStagePoint(const Vector2f& windowPos);
 	void windowToStageCoordinates(int windowX, int windowY, int& stageX, int& stageY);
+	void setLocalConnectionClient(uint32_t nameID,_NR<ASObject> client)
+	{
+		Locker l(mutexLocalConnection);
+		localconnection_client_map[nameID]=client;
+	}
+	void removeLocalConnectionClient(uint32_t nameID)
+	{
+		Locker l(mutexLocalConnection);
+		localconnection_client_map.erase(nameID);
+	}
+	void handleLocalConnectionEvent(LocalConnectionEvent* ev);
+	FramePhase getFramePhase() const { return ACQUIRE_READ(framePhase); }
+	void setFramePhase(FramePhase phase) { RELEASE_WRITE(framePhase, phase); }
 
 	/**
 	 * Be careful, SystemState constructor does some global initialization that must be done
@@ -369,7 +350,16 @@ public:
 	 * \param fileSize The size of the SWF being parsed, if known
 	 * \param mode FLASH or AIR
 	 */
-	SystemState(uint32_t fileSize, FLASH_MODE mode) DLL_PUBLIC;
+	SystemState
+	(
+		uint32_t fileSize,
+		FLASH_MODE mode,
+		EventLoop* _eventLoop = nullptr,
+		ITime* _time = nullptr,
+		Optional<ILogger&> _logger = {},
+		bool _runSingleThreaded = false,
+		size_t threads = SIZE_MAX
+	) DLL_PUBLIC;
 	~SystemState();
 	/* Stop engines, threads and free classes and objects.
 	 * This call will decRef this object in the end,
@@ -423,6 +413,7 @@ public:
 	bool useFastInterpreter;
 	bool useJit;
 	bool ignoreUnhandledExceptions;
+	bool runSingleThreaded;
 	ERROR_TYPE exitOnError;
 
 	//Parameters/FlashVars
@@ -442,9 +433,15 @@ public:
 	// so we use a second threadpool for them, to avoid deadlocks
 	void addDownloadJob(IThreadJob* j) DLL_PUBLIC;
 	void addTick(uint32_t tickTime, ITickJob* job);
+	void addFrameTick(ITickJob* job);
 	void addFrameTick(uint32_t tickTime, ITickJob* job);
 	void addWait(uint32_t waitTime, ITickJob* job);
 	void removeJob(ITickJob* job);
+	void pushEvent(const LSEvent& event);
+	void updateTimers(const TimeSpec& delta, bool allowFrameTimers = true);
+	TimeSpec getFakeCurrentTime() const { return timers.getFakeCurrentTime(); }
+	const LSTimer& getCurrentTimer() { return timers.getCurrentTimer(); }
+	Optional<const TimeSpec&> timeUntilNextTick() const { return _timeUntilNextTick.asRef(); }
 
 	void setRenderRate(float rate);
 	float getRenderRate();
@@ -489,6 +486,7 @@ public:
 	void registerFrameListener(DisplayObject* clip);
 	void unregisterFrameListener(DisplayObject* clip);
 	void addBroadcastEvent(const tiny_string& event);
+	void handleBroadcastEvent(const tiny_string& event);
 
 	//Invalidation queue management
 	void addToInvalidateQueue(_R<DisplayObject> d) override;
@@ -517,6 +515,10 @@ public:
 #ifdef MEMORY_USAGE_PROFILING
 	void saveMemoryUsageInformation(std::ofstream& out, int snapshotCount) const;
 #endif
+	using FontListCallback = std::function<void(ASFont*)>;
+	void forEachEmbeddedFont(FontListCallback callback) const;
+	void registerGlobalFont(ASFont* font);
+
 	/*
 	 * Pooling support
 	 */
@@ -552,68 +554,36 @@ public:
 	void waitMainSignal() DLL_PUBLIC;
 	void sendMainSignal() DLL_PUBLIC;
 
-	// static class properties are named static_<classname>_<propertyname>
-	_NR<SoundTransform> static_SoundMixer_soundTransform;
-	int static_SoundMixer_bufferTime;
-	_NR<ASObject> static_ObjectEncoding_dynamicPropertyWriter;
-	tiny_string static_Multitouch_inputMode;
-	_NR<ASFile> static_ASFile_applicationDirectory;
-	_NR<ASFile> static_ASFile_applicationStorageDirectory;
+	// Declare static class properties with `ASPROPERTY_STATIC(type, class, name)`.
+	ASPROPERTY_STATIC(_NR<SoundTransform>, SoundMixer, soundTransform);
+	ASPROPERTY_STATIC(int, SoundMixer, bufferTime);
+	ASPROPERTY_STATIC(_NR<ASObject>, ObjectEncoding, dynamicPropertyWriter);
+	ASPROPERTY_STATIC(tiny_string, Multitouch, inputMode);
+	ASPROPERTY_STATIC(_NR<ASFile>, ASFile, applicationDirectory);
+	ASPROPERTY_STATIC(_NR<ASFile>, ASFile, applicationStorageDirectory);
+	ASPROPERTY_STATIC(_NR<NativeApplication>, NativeApplication, nativeApplication);
+	ASPROPERTY_STATIC(bool, XML, ignoreComments);
+	ASPROPERTY_STATIC(bool, XML, ignoreProcessingInstructions);
+	ASPROPERTY_STATIC(bool, XML, ignoreWhitespace);
+	ASPROPERTY_STATIC(int, XML, prettyIndent);
+	ASPROPERTY_STATIC(bool, XML, prettyPrinting);
+	ASPROPERTY_STATIC(bool, AVM1XMLDocument, ignoreWhite);
 
 	ACQUIRE_RELEASE_FLAG(isinitialized);
+	bool use_testrunner_date; // ruffle tests use a specific date as "current date"
 	Mutex initializedMutex;
 	Cond initializedCond;
 	void waitInitialized();
 	void getClassInstanceByName(ASWorker* wrk, asAtom &ret, const tiny_string& clsname);
 	Mutex resetParentMutex;
-	void addDisplayObjectToResetParentList(DisplayObject* child)
-	{
-		Locker l(resetParentMutex);
-		child->incRef();
-		child->addStoredMember();
-		listResetParent.insert(child);
-	}
-	void resetParentList()
-	{
-		Locker l(resetParentMutex);
-		auto it = listResetParent.begin();
-		while (it != listResetParent.end())
-		{
-			(*it)->setParent(nullptr);
-			(*it)->removeStoredMember();
-			it = listResetParent.erase(it);
-		}
-	}
-	bool isInResetParentList(DisplayObject* d)
-	{
-		Locker l(resetParentMutex);
-		auto it = listResetParent.begin();
-		while (it != listResetParent.end())
-		{
-			if ((*it)==d)
-				return true;
-			it++;
-		}
-		return false;
-	}
-	void removeFromResetParentList(DisplayObject* d)
-	{
-		Locker l(resetParentMutex);
-		auto it = listResetParent.begin();
-		while (it != listResetParent.end())
-		{
-			if ((*it)==d)
-			{
-				d->removeStoredMember();
-				listResetParent.erase(it);
-				break;
-			}
-			it++;
-		}
-	}
+	void addDisplayObjectToResetParentList(DisplayObject* child);
+	void resetParentList();
+	bool isInResetParentList(DisplayObject* d);
+	void removeFromResetParentList(DisplayObject* d);
+	ASObject* getBuiltinFunction(as_atom_function v, int len = 0, Class_base* returnType=nullptr, Class_base* returnTypeAllArgsInt=nullptr);
 };
 
-class ParseThread: public IThreadJob
+class DLL_PUBLIC ParseThread: public IThreadJob
 {
 public:
 	int version;
@@ -653,6 +623,9 @@ private:
 	void setRootMovie(RootMovieClip *root);
 	void parseExtensions(RootMovieClip* root);
 };
+
+// Returns true if we're currently running in the main thread.
+bool isMainThread() DLL_PUBLIC;
 
 /* Returns the thread-specific SystemState */
 SystemState* getSys() DLL_PUBLIC;

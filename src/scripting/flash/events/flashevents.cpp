@@ -25,10 +25,15 @@
 #include "scripting/argconv.h"
 #include <algorithm>
 #include "scripting/flash/ui/gameinput.h"
+#include "scripting/toplevel/IFunction.h"
 #include "scripting/toplevel/Number.h"
 #include "scripting/toplevel/UInteger.h"
+#include "scripting/toplevel/Undefined.h"
+#include "scripting/flash/geom/Rectangle.h"
 #include "scripting/flash/utils/ByteArray.h"
 #include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/display/Loader.h"
+#include "scripting/flash/display/RootMovieClip.h"
 
 using namespace std;
 using namespace lightspark;
@@ -40,20 +45,19 @@ bool listener::operator==(const listener &r)
 		 */
 	if ((use_capture != r.use_capture) || (worker != r.worker))
 		return false;
-	if (asAtomHandler::getObjectNoCheck(f)->as<IFunction>()->closure_this
-			&& asAtomHandler::getObjectNoCheck(r.f)->as<IFunction>()->closure_this
-			&& asAtomHandler::getObjectNoCheck(f)->as<IFunction>()->closure_this != asAtomHandler::getObjectNoCheck(r.f)->as<IFunction>()->closure_this)
+	if (asAtomHandler::isValid(asAtomHandler::getObjectNoCheck(f)->as<IFunction>()->closure_this)
+		&& asAtomHandler::isValid(asAtomHandler::getObjectNoCheck(r.f)->as<IFunction>()->closure_this)
+		&& asAtomHandler::getObjectNoCheck(f)->as<IFunction>()->closure_this.uintval != asAtomHandler::getObjectNoCheck(r.f)->as<IFunction>()->closure_this.uintval)
 		return false;
 	return asAtomHandler::getObjectNoCheck(f)->isEqual(asAtomHandler::getObjectNoCheck(r.f));
 }
 
 void listener::resetClosure()
 {
-	if (asAtomHandler::isFunction(f) && asAtomHandler::as<IFunction>(f)->closure_this)
+	if (asAtomHandler::isFunction(f) && asAtomHandler::isValid(asAtomHandler::as<IFunction>(f)->closure_this))
 	{
-		ASObject* o = asAtomHandler::as<IFunction>(f)->closure_this;
-		asAtomHandler::as<IFunction>(f)->closure_this=nullptr;
-		o->removeStoredMember();
+		ASATOM_REMOVESTOREDMEMBER(asAtomHandler::as<IFunction>(f)->closure_this);
+		asAtomHandler::as<IFunction>(f)->closure_this=asAtomHandler::invalidAtom;
 	}
 }
 
@@ -137,22 +141,19 @@ void Event::sinit(Class_base* c)
 	c->setVariableAtomByQName("VIDEO_FRAME",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"videoFrame"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("WORKER_STATE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"workerState"),DECLARED_TRAIT);
 
-	c->setDeclaredMethodByQName("formatToString","",Class<IFunction>::getFunction(c->getSystemState(),formatToString),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("isDefaultPrevented","",Class<IFunction>::getFunction(c->getSystemState(),_isDefaultPrevented),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("preventDefault","",Class<IFunction>::getFunction(c->getSystemState(),_preventDefault),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("clone","",Class<IFunction>::getFunction(c->getSystemState(),clone),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("stopPropagation","",Class<IFunction>::getFunction(c->getSystemState(),stopPropagation),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("stopImmediatePropagation","",Class<IFunction>::getFunction(c->getSystemState(),stopImmediatePropagation),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("formatToString","",c->getSystemState()->getBuiltinFunction(formatToString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("isDefaultPrevented","",c->getSystemState()->getBuiltinFunction(_isDefaultPrevented),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("preventDefault","",c->getSystemState()->getBuiltinFunction(_preventDefault),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("clone","",c->getSystemState()->getBuiltinFunction(clone),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("stopPropagation","",c->getSystemState()->getBuiltinFunction(stopPropagation),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("stopImmediatePropagation","",c->getSystemState()->getBuiltinFunction(stopImmediatePropagation),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 	REGISTER_GETTER_RESULTTYPE(c,currentTarget,ASObject);
 	REGISTER_GETTER_RESULTTYPE(c,target,ASObject);
 	REGISTER_GETTER_RESULTTYPE(c,type,ASString);
 	REGISTER_GETTER_RESULTTYPE(c,eventPhase,UInteger);
 	REGISTER_GETTER_RESULTTYPE(c,bubbles,Boolean);
 	REGISTER_GETTER_RESULTTYPE(c,cancelable,Boolean);
-}
-
-void Event::buildTraits(ASObject* o)
-{
 }
 
 ASFUNCTIONBODY_ATOM(Event,_constructor)
@@ -212,6 +213,24 @@ ASFUNCTIONBODY_ATOM(Event,formatToString)
 	ret = asAtomHandler::fromObject(abstract_s(wrk,msg));
 }
 
+ASFUNCTIONBODY_ATOM(Event,_toString)
+{
+	Event* th=asAtomHandler::as<Event>(obj);
+	tiny_string msg = "[";
+	msg += th->getSystemState()->getStringFromUniqueId(th->getClass()->class_name.nameId);
+	msg += " type=\"";
+	msg += th->type;
+	msg += "\" bubbles=";
+	msg += th->bubbles ? "true" : "false";
+	msg += " cancelable=";
+	msg += th->cancelable ? "true" : "false";
+	msg += " eventPhase=";
+	msg += Number::toString(th->eventPhase);
+	msg += "]";
+
+	ret = asAtomHandler::fromObject(abstract_s(wrk,msg));
+}
+
 Event* Event::cloneImpl() const
 {
 	return Class<Event>::getInstanceS(getInstanceWorker(),type, bubbles, cancelable);
@@ -236,6 +255,8 @@ ASFUNCTIONBODY_ATOM(Event,stopImmediatePropagation)
 
 void WaitableEvent::wait()
 {
+	if (getSys()->runSingleThreaded || isVmThread())
+		return;
 	while (!handled)
 		getSys()->waitMainSignal();
 }
@@ -260,7 +281,7 @@ void EventPhase::sinit(Class_base* c)
 	c->setVariableAtomByQName("AT_TARGET",nsNameAndKind(),asAtomHandler::fromUInt(AT_TARGET),DECLARED_TRAIT);
 }
 
-FocusEvent::FocusEvent(ASWorker* wrk, Class_base* c, tiny_string _type):Event(wrk,c, _type)
+FocusEvent::FocusEvent(ASWorker* wrk, Class_base* c, tiny_string _type):Event(wrk,c, _type,true)
 {
 }
 
@@ -280,19 +301,19 @@ ASFUNCTIONBODY_ATOM(FocusEvent,_constructor)
 }
 
 MouseEvent::MouseEvent(ASWorker* wrk, Class_base* c)
- : Event(wrk,c, "mouseEvent",false,false,SUBTYPE_MOUSE_EVENT), modifiers(KMOD_NONE),buttonDown(false), delta(1), localX(0), localY(0), stageX(0), stageY(0), relatedObject(NullRef)
+ : Event(wrk,c, "mouseEvent",false,false,SUBTYPE_MOUSE_EVENT), modifiers(LSModifier::None),buttonDown(false), delta(1), localX(0), localY(0), stageX(0), stageY(0), relatedObject(NullRef)
 {
 }
 
 MouseEvent::MouseEvent(ASWorker* wrk, Class_base* c, const tiny_string& t, number_t lx, number_t ly,
-		       bool b, SDL_Keymod _modifiers, bool _buttonDown, _NR<InteractiveObject> relObj, int32_t _delta)
+		       bool b, const LSModifier& _modifiers, bool _buttonDown, _NR<InteractiveObject> relObj, int32_t _delta)
   : Event(wrk,c,t,b,false,SUBTYPE_MOUSE_EVENT), modifiers(_modifiers), buttonDown(_buttonDown),delta(_delta), localX(lx), localY(ly), stageX(0), stageY(0), relatedObject(relObj)
 {
 }
 
 Event* MouseEvent::cloneImpl() const
 {
-	return Class<MouseEvent>::getInstanceS(getInstanceWorker(),type,localX,localY,bubbles,(SDL_Keymod)modifiers,buttonDown,relatedObject,delta);
+	return Class<MouseEvent>::getInstanceS(getInstanceWorker(),type,localX,localY,bubbles,modifiers,buttonDown,relatedObject,delta);
 }
 
 ProgressEvent::ProgressEvent(ASWorker* wrk, Class_base* c):Event(wrk,c, "progress",false,false,SUBTYPE_PROGRESSEVENT),bytesLoaded(0),bytesTotal(0)
@@ -318,6 +339,7 @@ void ProgressEvent::sinit(Class_base* c)
 	c->setVariableAtomByQName("STANDARD_OUTPUT_DATA",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"standardOutputData"),DECLARED_TRAIT);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c,bytesLoaded,Number);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c,bytesTotal,Number);
+	c->setDeclaredMethodByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(ProgressEvent,bytesLoaded)
@@ -335,12 +357,34 @@ ASFUNCTIONBODY_ATOM(ProgressEvent,_constructor)
 		th->bytesTotal=asAtomHandler::toInt(args[4]);
 }
 
+ASFUNCTIONBODY_ATOM(ProgressEvent,_toString)
+{
+	ProgressEvent* th=asAtomHandler::as<ProgressEvent>(obj);
+	tiny_string msg = "[";
+	msg += th->getSystemState()->getStringFromUniqueId(th->getClass()->class_name.nameId);
+	msg += " type=\"";
+	msg += th->type;
+	msg += "\" bubbles=";
+	msg += th->bubbles ? "true" : "false";
+	msg += " cancelable=";
+	msg += th->cancelable ? "true" : "false";
+	msg += " eventPhase=";
+	msg += Number::toString(th->eventPhase);
+	msg += " bytesLoaded=";
+	msg += Number::toString(th->bytesLoaded);
+	msg += " bytesTotal=";
+	msg += Number::toString(th->bytesTotal);
+	msg += "]";
+
+	ret = asAtomHandler::fromObject(abstract_s(wrk,msg));
+}
+
 void TimerEvent::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, Event, _constructor, CLASS_SEALED);
 	c->setVariableAtomByQName("TIMER",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"timer"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("TIMER_COMPLETE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"timerComplete"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("updateAfterEvent","",Class<IFunction>::getFunction(c->getSystemState(),updateAfterEvent),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("updateAfterEvent","",c->getSystemState()->getBuiltinFunction(updateAfterEvent),NORMAL_METHOD,true);
 }
 ASFUNCTIONBODY_ATOM(TimerEvent,updateAfterEvent)
 {
@@ -368,7 +412,7 @@ void MouseEvent::sinit(Class_base* c)
 	c->setVariableAtomByQName("MIDDLE_MOUSE_UP",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"middleMouseUp"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("CONTEXT_MENU",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"contextMenu"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("RELEASE_OUTSIDE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"releaseOutside"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("updateAfterEvent","",Class<IFunction>::getFunction(c->getSystemState(),updateAfterEvent),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("updateAfterEvent","",c->getSystemState()->getBuiltinFunction(updateAfterEvent),NORMAL_METHOD,true);
 
 	REGISTER_GETTER_SETTER(c,relatedObject);
 	REGISTER_GETTER(c,stageX);
@@ -395,13 +439,13 @@ ASFUNCTIONBODY_ATOM(MouseEvent,_constructor)
 		th->relatedObject=ArgumentConversionAtom< _NR<InteractiveObject> >::toConcrete(wrk,args[5],NullRef);
 	if(argslen>=7)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[6],false))
-			th->modifiers |= KMOD_CTRL;
+			th->modifiers |= LSModifier::Ctrl;
 	if(argslen>=8)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[7],false))
-			th->modifiers |= KMOD_ALT;
+			th->modifiers |= LSModifier::Alt;
 	if(argslen>=9)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[8],false))
-			th->modifiers |= KMOD_SHIFT;
+			th->modifiers |= LSModifier::Shift;
 	if(argslen>=10)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[9],false))
 			th->buttonDown = true;
@@ -409,10 +453,10 @@ ASFUNCTIONBODY_ATOM(MouseEvent,_constructor)
 		th->delta=asAtomHandler::toInt(args[10]);
 	if(argslen>=12)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[11],false))
-			th->modifiers |= KMOD_GUI;
+			th->modifiers |= LSModifier::Super;
 	if(argslen>=13)
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[12],false))
-			th->modifiers |= KMOD_CTRL;
+			th->modifiers |= LSModifier::Ctrl;
 	// TODO: args[13] = clickCount
 	if(argslen>=14)
 		LOG(LOG_NOT_IMPLEMENTED,"MouseEvent: clickcount");
@@ -467,49 +511,49 @@ ASFUNCTIONBODY_ATOM(MouseEvent,_setter_localY)
 ASFUNCTIONBODY_ATOM(MouseEvent,_getter_altKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_ALT));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Alt));
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_setter_altKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	th->modifiers |= KMOD_ALT;
+	th->modifiers |= LSModifier::Alt;
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_getter_controlKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_CTRL));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Ctrl));
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_setter_controlKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	th->modifiers |= KMOD_CTRL;
+	th->modifiers |= LSModifier::Ctrl;
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_getter_ctrlKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_CTRL));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Ctrl));
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_setter_ctrlKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	th->modifiers |= KMOD_CTRL;
+	th->modifiers |= LSModifier::Ctrl;
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_getter_shiftKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_SHIFT));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Shift));
 }
 
 ASFUNCTIONBODY_ATOM(MouseEvent,_setter_shiftKey)
 {
 	MouseEvent* th=asAtomHandler::as<MouseEvent>(obj);
-	th->modifiers |= KMOD_SHIFT;
+	th->modifiers |= LSModifier::Shift;
 }
 ASFUNCTIONBODY_ATOM(MouseEvent,updateAfterEvent)
 {
@@ -559,6 +603,67 @@ ASFUNCTIONBODY_ATOM(NativeDragEvent,_constructor)
 	LOG(LOG_NOT_IMPLEMENTED,"NativeDragEvent: constructor");
 }
 
+NativeWindowBoundsEvent::NativeWindowBoundsEvent(ASWorker* wrk, Class_base* c) : Event(wrk,c, "")
+{
+	subtype=SUBTYPE_NATIVEWINDOWBOUNDSEVENT;
+}
+
+NativeWindowBoundsEvent::NativeWindowBoundsEvent(ASWorker* wrk, Class_base* c, const tiny_string& t, _NR<Rectangle> _beforeBounds, _NR<Rectangle> _afterBounds)
+ : Event(wrk,c,t),afterBounds(_afterBounds),beforeBounds(_beforeBounds)
+{
+	subtype=SUBTYPE_NATIVEWINDOWBOUNDSEVENT;
+}
+
+void NativeWindowBoundsEvent::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, Event, _constructor, CLASS_SEALED);
+	c->setVariableAtomByQName("MOVE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"move"),CONSTANT_TRAIT);
+	c->setVariableAtomByQName("MOVING",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"moving"),CONSTANT_TRAIT);
+	c->setVariableAtomByQName("RESIZE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"resize"),CONSTANT_TRAIT);
+	c->setVariableAtomByQName("RESIZING",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"resizing"),CONSTANT_TRAIT);
+	c->setDeclaredMethodByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	
+	REGISTER_GETTER_RESULTTYPE(c,afterBounds,Rectangle);
+	REGISTER_GETTER_RESULTTYPE(c,beforeBounds,Rectangle);
+}
+
+Event* NativeWindowBoundsEvent::cloneImpl() const
+{
+	return Class<NativeWindowBoundsEvent>::getInstanceS(getInstanceWorker(),type, beforeBounds,afterBounds);
+}
+
+ASFUNCTIONBODY_GETTER(NativeWindowBoundsEvent,afterBounds)
+ASFUNCTIONBODY_GETTER(NativeWindowBoundsEvent,beforeBounds)
+
+ASFUNCTIONBODY_ATOM(NativeWindowBoundsEvent,_constructor)
+{
+	NativeWindowBoundsEvent* th=asAtomHandler::as<NativeWindowBoundsEvent>(obj);
+	ARG_CHECK(ARG_UNPACK(th->type)(th->bubbles, false)(th->cancelable, false)(th->beforeBounds,NullRef)(th->afterBounds,NullRef));
+
+}
+ASFUNCTIONBODY_ATOM(NativeWindowBoundsEvent,_toString)
+{
+	NativeWindowBoundsEvent* th=asAtomHandler::as<NativeWindowBoundsEvent>(obj);
+	tiny_string res = "[NativeWindowBoundsEvent type=";
+	res += th->type;
+	res += " bubbles=";
+	res += th->bubbles ? "true" : "false";
+	res += " cancelable=";
+	res += th->cancelable ? "true" : "false";
+	res += " previousDisplayState=";
+	if (th->beforeBounds)
+		res += th->beforeBounds->toString();
+	else
+		res += "null";
+	res += " currentDisplayState=";
+	if (th->afterBounds)
+		res += th->afterBounds->toString();
+	else
+		res += "null";
+	res += "]";
+	ret = asAtomHandler::fromString(wrk->getSystemState(),res);
+}
+		
 IOErrorEvent::IOErrorEvent(ASWorker* wrk, Class_base* c, const tiny_string& t, const std::string& e, int id) : ErrorEvent(wrk,c, t,e,id)
 {
 }
@@ -599,8 +704,6 @@ bool EventDispatcher::destruct()
 }
 bool EventDispatcher::countCylicMemberReferences(garbagecollectorstate& gcstate)
 {
-	if (gcstate.checkAncestors(this))
-		return false;
 	bool ret = ASObject::countCylicMemberReferences(gcstate);
 	for (auto it = handlers.begin(); it != handlers.end(); it++)
 	{
@@ -626,8 +729,11 @@ void EventDispatcher::prepareShutdown()
 		{
 			ASObject* f = asAtomHandler::getObject((*it2).f);
 			if (f)
+			{
 				f->prepareShutdown();
-			it2++;
+				f->removeStoredMember();
+			}
+			it2 = it->second.erase(it2);
 		}
 		it++;
 	}
@@ -654,10 +760,10 @@ void EventDispatcher::sinit(Class_base* c)
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	c->addImplementedInterface(InterfaceClass<IEventDispatcher>::getClass(c->getSystemState()));
 
-	c->setDeclaredMethodByQName("addEventListener","",Class<IFunction>::getFunction(c->getSystemState(),addEventListener),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("hasEventListener","",Class<IFunction>::getFunction(c->getSystemState(),_hasEventListener,1,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("removeEventListener","",Class<IFunction>::getFunction(c->getSystemState(),removeEventListener),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("dispatchEvent","",Class<IFunction>::getFunction(c->getSystemState(),dispatchEvent,1,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("addEventListener","",c->getSystemState()->getBuiltinFunction(addEventListener),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("hasEventListener","",c->getSystemState()->getBuiltinFunction(_hasEventListener,1,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("removeEventListener","",c->getSystemState()->getBuiltinFunction(removeEventListener),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("dispatchEvent","",c->getSystemState()->getBuiltinFunction(dispatchEvent,1,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 
 	IEventDispatcher::linkTraits(c);
 }
@@ -679,15 +785,15 @@ ASFUNCTIONBODY_ATOM(EventDispatcher,addEventListener)
 		//throw RunTimeException("Type mismatch in EventDispatcher::addEventListener");
 		return;
 
+	bool useWeakReference=false;
 	bool useCapture=false;
 	int32_t priority=0;
-
 	if(argslen>=3)
 		useCapture=asAtomHandler::Boolean_concrete(args[2]);
 	if(argslen>=4)
 		priority=asAtomHandler::toInt(args[3]);
-	if(argslen>=5 &&asAtomHandler::toInt(args[4]))
-		LOG(LOG_NOT_IMPLEMENTED,"EventDispatcher::addEventListener parameter useWeakReference is ignored");
+	if(argslen>=5)
+		useWeakReference = asAtomHandler::Boolean_concrete(args[4]);
 
 	const tiny_string& eventName=asAtomHandler::toString(args[0],wrk);
 	if(wrk->isPrimordial // don't register frame listeners for background workers
@@ -707,11 +813,14 @@ ASFUNCTIONBODY_ATOM(EventDispatcher,addEventListener)
 		//Ordered insertion
 		list<listener>::iterator insertionPoint=lower_bound(listeners.begin(),listeners.end(),newListener);
 		IFunction* newfunc = asAtomHandler::as<IFunction>(args[1]);
+		if (useWeakReference && !newfunc->inClass)
+			LOG(LOG_NOT_IMPLEMENTED,"EventDispatcher::addEventListener parameter useWeakReference is ignored");
 		// check if a listener that matches type, use_capture and function is already registered
 		if (insertionPoint != listeners.end() && (*insertionPoint).use_capture == newListener.use_capture)
 		{
 			IFunction* insertPointFunc = asAtomHandler::as<IFunction>((*insertionPoint).f);
-			if (insertPointFunc == newfunc || (insertPointFunc->clonedFrom && insertPointFunc->clonedFrom == newfunc->clonedFrom && insertPointFunc->closure_this==newfunc->closure_this))
+			if (insertPointFunc == newfunc || (insertPointFunc->clonedFrom && insertPointFunc->clonedFrom == newfunc->clonedFrom
+											   && insertPointFunc->closure_this.uintval==newfunc->closure_this.uintval))
 				return; // don't register the same listener twice
 		}
 		newfunc->incRef();
@@ -798,6 +907,7 @@ ASFUNCTIONBODY_ATOM(EventDispatcher,dispatchEvent)
 	e->getVariableByMultiname(target,m,GET_VARIABLE_OPTION::NONE,wrk);
 	if(asAtomHandler::isValid(target) && !asAtomHandler::isNull(target) && !asAtomHandler::isUndefined(target))
 	{
+		ASATOM_DECREF(target);
 		//Object must be cloned, cloning is implemented with the clone AS method
 		asAtom cloned=asAtomHandler::invalidAtom;
 		e->executeASMethod(cloned,"clone", {""}, nullptr, 0);
@@ -808,11 +918,12 @@ ASFUNCTIONBODY_ATOM(EventDispatcher,dispatchEvent)
 			return;
 		}
 
-		ASATOM_INCREF(cloned);
 		e = _MR(asAtomHandler::getObject(cloned)->as<Event>());
 	}
 	if(asAtomHandler::isValid(th->forcedTarget))
 		e->setTarget(th->forcedTarget);
+	else
+		e->setTarget(obj);
 	ABCVm::publicHandleEvent(th, e);
 	asAtomHandler::setBool(ret,true);
 }
@@ -874,10 +985,13 @@ void EventDispatcher::handleEvent(_R<Event> e)
 			continue;
 		}
 		if (e->immediatePropagationStopped)
-			break;
+		{
+			ASATOM_DECREF(tmpListener[i].f);
+			continue;
+		}
 		asAtom arg0= asAtomHandler::fromObject(e.getPtr());
 		IFunction* func = asAtomHandler::as<IFunction>(tmpListener[i].f);
-		asAtom v = asAtomHandler::fromObject(func->closure_this ? func->closure_this : this);
+		asAtom v = asAtomHandler::isValid(func->closure_this) ? func->closure_this : asAtomHandler::fromObject(this);
 		asAtom ret=asAtomHandler::invalidAtom;
 		asAtomHandler::callFunction(tmpListener[i].f,tmpListener[i].worker,ret,v,&arg0,1,false);
 		ASATOM_DECREF(ret);
@@ -899,7 +1013,7 @@ bool EventDispatcher::hasEventListener(const tiny_string& eventName)
 
 NetStatusEvent::NetStatusEvent(ASWorker* wrk, Class_base* c, const tiny_string& level, const tiny_string& code):Event(wrk,c, "netStatus"),statuscode(code)
 {
-	ASObject* info=Class<ASObject>::getInstanceS(wrk);
+	ASObject* info=new_asobject(wrk);
 	info->setVariableAtomByQName("level",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),level),DECLARED_TRAIT);
 	info->setVariableAtomByQName("code",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),code),DECLARED_TRAIT);
 	setVariableByQName("info","",info, DECLARED_TRAIT);
@@ -981,8 +1095,8 @@ ASFUNCTIONBODY_ATOM(FullScreenEvent,_constructor)
 	Event::_constructor(ret,wrk,obj,args,baseClassArgs);
 }
 
-KeyboardEvent::KeyboardEvent(ASWorker* wrk, Class_base* c, tiny_string _type, uint32_t _sdlscancode, uint32_t _charcode, uint32_t _keycode, SDL_Keymod _modifiers, SDL_Keycode _sdlkeycode)
-  : Event(wrk,c, _type,false,false,SUBTYPE_KEYBOARD_EVENT), modifiers(_modifiers), sdlScanCode(_sdlscancode), charCode(_charcode), keyCode(_keycode), keyLocation(0),sdlkeycode(_sdlkeycode)
+KeyboardEvent::KeyboardEvent(ASWorker* wrk, Class_base* c, tiny_string _type, const AS3KeyCode& _charCode, const AS3KeyCode& _keyCode, const LSModifier& _modifiers)
+  : Event(wrk,c, _type,false,false,SUBTYPE_KEYBOARD_EVENT), modifiers(_modifiers), charCode(_charCode), keyCode(_keyCode), keyLocation(0)
 {
 }
 
@@ -999,6 +1113,7 @@ void KeyboardEvent::sinit(Class_base* c)
 	REGISTER_GETTER_SETTER_RESULTTYPE(c, shiftKey,Boolean);
 	c->setVariableAtomByQName("KEY_DOWN",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"keyDown"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("KEY_UP",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"keyUp"),DECLARED_TRAIT);
+	c->setDeclaredMethodByQName("updateAfterEvent","",c->getSystemState()->getBuiltinFunction(updateAfterEvent),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent,_constructor)
@@ -1009,29 +1124,29 @@ ASFUNCTIONBODY_ATOM(KeyboardEvent,_constructor)
 	Event::_constructor(ret,wrk,obj,args,baseClassArgs);
 
 	if(argslen > 3) {
-		th->charCode = asAtomHandler::toUInt(args[3]);
+		th->charCode = (AS3KeyCode)asAtomHandler::toUInt(args[3]);
 	}
 	if(argslen > 4) {
-		th->keyCode = asAtomHandler::toUInt(args[4]);
+		th->keyCode = (AS3KeyCode)asAtomHandler::toUInt(args[4]);
 	}
 	if(argslen > 5) {
 		th->keyLocation = asAtomHandler::toUInt(args[5]);
 	}
 	if(argslen > 6) {
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[6],false))
-			th->modifiers |= KMOD_CTRL;
+			th->modifiers |= LSModifier::Ctrl;
 	}
 	if(argslen > 7) {
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[7],false))
-			th->modifiers |= KMOD_ALT;
+			th->modifiers |= LSModifier::Alt;
 	}
 	if(argslen > 8) {
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[8],false))
-			th->modifiers |= KMOD_SHIFT;
+			th->modifiers |= LSModifier::Shift;
 	}
 	if(argslen > 9) {
 		if (ArgumentConversionAtom<bool>::toConcrete(wrk,args[9],false))
-			th->modifiers |= KMOD_CTRL;
+			th->modifiers |= LSModifier::Ctrl;
 	}
 	// args[10] (commandKeyValue) is only supported on Max OSX
 	if(argslen > 10) {
@@ -1047,13 +1162,13 @@ ASFUNCTIONBODY_GETTER_SETTER(KeyboardEvent, keyLocation)
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _getter_altKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_ALT));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Alt));
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _setter_altKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	th->modifiers |= KMOD_ALT;
+	th->modifiers |= LSModifier::Alt;
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _getter_commandKey)
@@ -1070,37 +1185,42 @@ ASFUNCTIONBODY_ATOM(KeyboardEvent, _setter_commandKey)
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _getter_controlKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_CTRL));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Ctrl));
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _setter_controlKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	th->modifiers |= KMOD_CTRL;
+	th->modifiers |= LSModifier::Ctrl;
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _getter_ctrlKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_CTRL));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Ctrl));
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _setter_ctrlKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	th->modifiers |= KMOD_CTRL;
+	th->modifiers |= LSModifier::Ctrl;
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _getter_shiftKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	asAtomHandler::setBool(ret,(bool)(th->modifiers & KMOD_SHIFT));
+	asAtomHandler::setBool(ret,(bool)(th->modifiers & LSModifier::Shift));
 }
 
 ASFUNCTIONBODY_ATOM(KeyboardEvent, _setter_shiftKey)
 {
 	KeyboardEvent* th=static_cast<KeyboardEvent*>(asAtomHandler::getObject(obj));
-	th->modifiers |= KMOD_SHIFT;
+	th->modifiers |= LSModifier::Shift;
+}
+
+ASFUNCTIONBODY_ATOM(KeyboardEvent,updateAfterEvent)
+{
+	LOG(LOG_NOT_IMPLEMENTED,"KeyboardEvent::updateAfterEvent not implemented");
 }
 
 Event* KeyboardEvent::cloneImpl() const
@@ -1113,7 +1233,6 @@ Event* KeyboardEvent::cloneImpl() const
 	cloned->charCode = charCode;
 	cloned->keyCode = keyCode;
 	cloned->keyLocation = keyLocation;
-	cloned->sdlkeycode = sdlkeycode;
 	return cloned;
 }
 
@@ -1314,12 +1433,29 @@ void ParseRPCMessageEvent::finalize()
 	responder.reset();
 }
 
+Event* StatusEvent::cloneImpl() const
+{
+	StatusEvent *clone = Class<StatusEvent>::getInstanceS(getInstanceWorker());
+	clone->code = code;
+	clone->level = level;
+	// Event
+	clone->type = type;
+	clone->bubbles = bubbles;
+	clone->cancelable = cancelable;
+	return clone;
+}
+
 void StatusEvent::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, Event, _constructor, CLASS_SEALED);
 	/* TODO: dispatch this event */
 	c->setVariableAtomByQName("STATUS",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"status"),DECLARED_TRAIT);
+	REGISTER_GETTER_SETTER_RESULTTYPE(c, code, ASString);
+	REGISTER_GETTER_SETTER_RESULTTYPE(c, level, ASString);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(StatusEvent, code)
+ASFUNCTIONBODY_GETTER_SETTER(StatusEvent, level)
 
 void DataEvent::sinit(Class_base* c)
 {
@@ -1575,6 +1711,15 @@ Event* ContextMenuEvent::cloneImpl() const
 	return clone;
 }
 
+ContextMenuEvent::ContextMenuEvent(ASWorker* wrk, Class_base* c) : Event(wrk,c, "ContextMenuEvent")
+{
+}
+
+ContextMenuEvent::ContextMenuEvent(ASWorker* wrk, Class_base* c, tiny_string t, _NR<InteractiveObject> target, _NR<InteractiveObject> owner)
+	: Event(wrk,c, t,false,false,SUBTYPE_CONTEXTMENUEVENT),mouseTarget(target),contextMenuOwner(owner)
+{
+}
+
 void TouchEvent::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, Event, _constructor, CLASS_SEALED);
@@ -1630,7 +1775,7 @@ void SampleDataEvent::sinit(Class_base* c)
 {
 	CLASS_SETUP_NO_CONSTRUCTOR(c, Event, CLASS_SEALED);
 	c->setVariableAtomByQName("SAMPLE_DATA",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"sampleData"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(c->getSystemState(),_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
 	
 	REGISTER_GETTER_SETTER_RESULTTYPE(c, data,ByteArray);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c, position,Number);
@@ -1701,7 +1846,7 @@ void ThrottleEvent::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, Event, _constructor, CLASS_SEALED);
 	c->setVariableAtomByQName("THROTTLE",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"Throttle"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(c->getSystemState(),_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString),NORMAL_METHOD,true);
 	
 	REGISTER_GETTER(c, state);
 	REGISTER_GETTER(c, targetFrameRate);
@@ -1804,3 +1949,52 @@ Event* GameInputEvent::cloneImpl() const
 	return clone;
 }
 
+
+LocalConnectionEvent::LocalConnectionEvent(uint32_t _nameID, uint32_t _methodID, asAtom* _args, uint32_t _numargs): Event(nullptr,nullptr,"LocalConnectionEvent")
+  ,nameID(_nameID),methodID(_methodID)
+{
+	numargs=_numargs;
+	args = new asAtom[numargs];
+	for (uint32_t i = 0; i < numargs; i++)
+	{
+		args[i]=_args[i];
+		ASATOM_INCREF(args[i]);
+	}
+}
+
+LocalConnectionEvent::~LocalConnectionEvent()
+{
+	for (uint32_t i = 0; i < numargs; i++)
+	{
+		ASATOM_DECREF(args[i]);
+	}
+	
+}
+
+GetMouseTargetEvent::GetMouseTargetEvent(uint32_t _x, uint32_t _y, HIT_TYPE _type): WaitableEvent("GetMouseTargetEvent"),x(_x),y(_y),type(_type)
+{
+}
+
+SetLoaderContentEvent::SetLoaderContentEvent(_NR<DisplayObject> m, _NR<Loader> _loader): Event(nullptr,nullptr,"SetLoaderContentEvent"),content(m),loader(_loader)
+{
+}
+
+InitFrameEvent::InitFrameEvent(_NR<DisplayObject> m) : Event(nullptr,nullptr, "InitFrameEvent"),clip(m)
+{
+}
+
+ExecuteFrameScriptEvent::ExecuteFrameScriptEvent(_NR<DisplayObject> m):Event(nullptr,nullptr, "ExecuteFrameScriptEvent"),clip(m)
+{
+}
+
+AdvanceFrameEvent::AdvanceFrameEvent(_NR<DisplayObject> m): Event(nullptr,nullptr,"AdvanceFrameEvent"),clip(m)
+{
+}
+
+RootConstructedEvent::RootConstructedEvent(_NR<DisplayObject> m, bool explicit_): Event(nullptr,nullptr,"RootConstructedEvent"),clip(m),_explicit(explicit_)
+{
+}
+
+TextInputEvent::TextInputEvent(_NR<InteractiveObject> m, const tiny_string& s) : Event(nullptr,nullptr, "TextInputEvent"),target(m),text(s)
+{
+}

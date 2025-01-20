@@ -20,18 +20,22 @@
 #ifndef SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H
 #define SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H 1
 
+#include "interfaces/threading.h"
 #include "compat.h"
 #include "asobject.h"
+#include "threading.h"
 #include "scripting/abcutils.h"
 #include "scripting/flash/utils/ByteArray.h"
 #include "scripting/toplevel/Error.h"
 #include "scripting/flash/events/flashevents.h"
+#include "backends/urlutils.h"
 #include <sys/time.h>
 
 #define MIN_DOMAIN_MEMORY_LIMIT 1024
 namespace lightspark
 {
-
+class DefineScalingGridTag;
+class FontTag;
 class SecurityDomain;
 struct call_context;
 
@@ -85,16 +89,72 @@ private:
 	std::vector<Global*> globalScopes;
 	_NR<ByteArray> defaultDomainMemory;
 	void cbDomainMemory(_NR<ByteArray> oldvalue);
+	// list of classes where super class is not defined yet
+	std::unordered_map<Class_base*,Class_base*> classesSuperNotFilled;
+	// list of classes where interfaces are not yet linked
+	std::vector<Class_base*> classesToLinkInterfaces;
+	
+	Mutex dictSpinlock;
+	std::unordered_map < uint32_t, DictionaryTag* > dictionary;
+	std::map < QName, DictionaryTag* > classesToBeBound;
+	std::map < tiny_string,FontTag* > embeddedfonts;
+	std::map < uint32_t,FontTag* > embeddedfontsByID;
+	unordered_map<uint32_t,_NR<IFunction>> avm1ClassConstructors;
+	Mutex scalinggridsmutex;
+	std::unordered_map < uint32_t, RECT > scalinggrids;
+	URLInfo origin;
+	//frameSize and frameRate are valid only after the header has been parsed
+	RECT frameSize;
+	float frameRate;
+	URLInfo baseURL;
 public:
+	//map of all classed defined in the swf. They own one reference to each class/template
+	//key is the stringID of the class name (without namespace)
+	std::multimap<uint32_t, Class_base*> customClasses;
+	std::map<QName,std::unordered_set<uint32_t>*> customclassoverriddenmethods;
+	/*
+	 * Support for class aliases in AMF3 serialization
+	 */
+	std::map<tiny_string, _R<Class_base> > aliasMap;
+	std::map<QName, Template_base*> templates;
+
+	uint32_t version;
+	bool usesActionScript3;
 	ByteArray* currentDomainMemory;
 	ApplicationDomain(ASWorker* wrk, Class_base* c, _NR<ApplicationDomain> p=NullRef);
 	void finalize() override;
 	void prepareShutdown() override;
 	std::map<const multiname*, Class_base*> classesBeingDefined;
 	std::map<QName, Class_base*> instantiatedTemplates;
-
-	// list of classes where super class is not defined yet 
-	std::list<Class_base*> classesSuperNotFilled;
+	
+	void SetAllClassLinks();
+	void AddClassLinks(Class_base* target);
+	bool newClassRecursiveLink(Class_base* target, Class_base* c);
+	void addSuperClassNotFilled(Class_base* cls);
+	void copyBorrowedTraitsFromSuper(Class_base* cls);
+	void addToDictionary(DictionaryTag* r);
+	DictionaryTag* dictionaryLookup(int id);
+	DictionaryTag* dictionaryLookupByName(uint32_t nameID);
+	void registerEmbeddedFont(const tiny_string fontname, FontTag *tag);
+	FontTag* getEmbeddedFont(const tiny_string fontname) const;
+	FontTag* getEmbeddedFontByID(uint32_t fontID) const;
+	void addToScalingGrids(const DefineScalingGridTag* r);
+	RECT* ScalingGridsLookup(int id);
+	void addBinding(const tiny_string& name, DictionaryTag *tag);
+	void bindClass(const QName &classname, Class_inherit* cls);
+	void checkBinding(DictionaryTag* tag);
+	// map AVM1 class constructors to named tags
+	bool AVM1registerTagClass(const tiny_string& name, _NR<IFunction> theClassConstructor);
+	AVM1Function* AVM1getClassConstructor(uint32_t spriteID);
+	void setOrigin(const tiny_string& u, const tiny_string& filename="");
+	URLInfo& getOrigin() { return origin; }
+	void setFrameSize(const RECT& f);
+	RECT getFrameSize() const;
+	float getFrameRate() const DLL_PUBLIC;
+	void setFrameRate(float f);
+	void setBaseURL(const tiny_string& url);
+	const URLInfo& getBaseURL();
+	
 
 	static void sinit(Class_base* c);
 	void registerGlobalScope(Global* scope);
@@ -325,20 +385,24 @@ private:
 	bool started;
 	bool inGarbageCollection;
 	bool inShutdown;
+	bool inFinalize;
 	//Synchronization
 	Mutex event_queue_mutex;
+	Mutex constantrefmutex;
 	Cond sem_event_cond;
 	typedef std::pair<_NR<EventDispatcher>,_R<Event>> eventType;
 	std::deque<eventType> events_queue;
 	map<const Class_base*,_R<Prototype>> protoypeMap;
-	std::unordered_set<ASObject*> garbagecollection;
-	std::unordered_set<ASObject*> garbagecollectiondeleted;
-	std::unordered_set<ASObject*> constantrefs;
-	struct timeval last_garbagecollection;
+	std::set<ASObject*> constantrefs;
+	uint64_t last_garbagecollection;
 	std::vector<ABCContext*> contexts;
 public:
+	Stage* stage; // every worker has its own stage. In case of the primordial worker this points to the stage of the SystemState.
 	asfreelist* freelist;
 	asfreelist freelist_syntheticfunction;
+	asfreelist freelist_activationobject;
+	asfreelist freelist_asobject;
+	
 	ASWorker(SystemState* s); // constructor for primordial worker only to be used in SystemState constructor
 	ASWorker(Class_base* c);
 	ASWorker(ASWorker* wrk,Class_base* c);
@@ -348,8 +412,10 @@ public:
 	Prototype* getClassPrototype(const Class_base* cls);
 	static void sinit(Class_base*);
 
+	bool isExplicitlyConstructed() const { return currentCallContext != nullptr && currentCallContext->explicitConstruction; }
 	//  TODO merge stacktrace handling with ABCVm
 	abc_limits limits;
+	std::vector<call_context*> callStack;
 	call_context* currentCallContext;
 	/* The current recursion level. Each call increases this by one,
 	 * each return from a call decreases this. */
@@ -369,7 +435,21 @@ public:
 	FORCE_INLINE void decStack(call_context* saved_cc)
 	{
 		currentCallContext = saved_cc;
-		--cur_recursion; //decrement current recursion depth
+		if (cur_recursion > 0)
+			--cur_recursion; //decrement current recursion depth
+	}
+	std::vector<AVM1context*> AVM1callStack;
+	AVM1Function* AVM1getCallee() const
+	{
+		return AVM1callStack.empty() ? nullptr : AVM1callStack.back()->callee;
+	}
+	uint8_t AVM1getSwfVersion() const
+	{
+		return AVM1callStack.empty() ? UINT8_MAX : AVM1callStack.back()->swfversion;
+	}
+	bool needsActionScript3() const
+	{
+		return AVM1getSwfVersion()==UINT8_MAX;
 	}
 	void throwStackOverflow();
 	ASFUNCTION_ATOM(_getCurrent);
@@ -392,33 +472,18 @@ public:
 	tiny_string getDefaultXMLNamespace() const;
 	uint32_t getDefaultXMLNamespaceID() const;
 	void dumpStacktrace();
-	void addObjectToGarbageCollector(ASObject* o)
-	{
-		garbagecollection.insert(o);
-	}
-	void removeObjectFromGarbageCollector(ASObject* o)
-	{
-		garbagecollection.erase(o);
-		garbagecollectiondeleted.erase(o);
-		constantrefs.erase(o);
-	}
+	Mutex gcmutex;
+	void addObjectToGarbageCollector(ASObject* o);
+	void removeObjectFromGarbageCollector(ASObject* o);
 	void processGarbageCollection(bool force);
 	FORCE_INLINE bool isInGarbageCollection() const { return inGarbageCollection; }
-	FORCE_INLINE bool isDeletedInGarbageCollection(ASObject* o) const
-	{
-		return inGarbageCollection && garbagecollectiondeleted.find(o) != garbagecollectiondeleted.end();
-	}
-	void setDeletedInGarbageCollection(ASObject* o)
-	{
-		garbagecollectiondeleted.insert(o);
-	}
-	void registerConstantRef(ASObject* obj)
-	{
-		if (inShutdown)
-			return;
-		constantrefs.insert(obj);
-	}
-	bool isShuttingDown() const { return inShutdown;}
+	inline bool inFinalization() const { return inFinalize; }
+	void registerConstantRef(ASObject* obj);
+	
+	// these are needed keep track of native extension calls
+	std::list<asAtom> nativeExtensionAtomlist;
+	std::list<uint8_t*> nativeExtensionStringlist;
+	uint32_t nativeExtensionCallCount;
 };
 class WorkerDomain: public ASObject
 {

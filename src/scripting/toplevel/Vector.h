@@ -21,6 +21,7 @@
 #define SCRIPTING_TOPLEVEL_VECTOR_H 1
 
 #include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "class.h"
 
 namespace lightspark
@@ -33,10 +34,10 @@ class TemplatedClass : public Class<T>
 private:
 	/* the Template<T>* this class was generated from */
 	const Template_base* templ;
-	std::vector<const Type*> types;
+	std::vector<Type*> types;
 	asfreelist freelist;
 public:
-	TemplatedClass(const QName& name, const std::vector<const Type*>& _types, Template_base* _templ, MemoryAccount* m)
+	TemplatedClass(const QName& name, const std::vector<Type*>& _types, Template_base* _templ, MemoryAccount* m)
 		: Class<T>(name,ClassName<T>::id, m), templ(_templ), types(_types)
 	{
 	}
@@ -73,23 +74,32 @@ public:
 		return templ;
 	}
 
-	std::vector<const Type*> getTypes() const
+	std::vector<Type*> getTypes() const
 	{
 		return types;
 	}
-	void addType(const Type* type)
+	void addType(Type* type)
 	{
 		types.push_back(type);
 	}
-
-	bool coerce(ASWorker* wrk,asAtom& o) const override
+	bool coerceArgument(ASWorker* wrk,asAtom& o) override
+	{
+		if (!asAtomHandler::isUndefined(o) &&
+			(this->types.empty() || this->types.front() == Type::anyType))
+		{
+			// call argument coercion also allowed if argument type is Vector.<any>
+			return false;
+		}
+		return true;
+	}
+	bool coerce(ASWorker* wrk,asAtom& o) override
 	{
 		if (asAtomHandler::isUndefined(o))
 		{
 			asAtomHandler::setNull(o);
 			return true;
 		}
-		else if (asAtomHandler::isNull(o) || (asAtomHandler::isObject(o) && asAtomHandler::is<T>(o) && asAtomHandler::getObjectNoCheck(o)->as<T>()->sameType(this)))
+		else if (asAtomHandler::isNull(o)  || (asAtomHandler::isObject(o) && asAtomHandler::is<T>(o) && asAtomHandler::getObjectNoCheck(o)->as<T>()->sameType(this)))
 		{
 			// Vector.<x> can be coerced to Vector.<y>
 			// only if x and y are the same type
@@ -97,9 +107,18 @@ public:
 		}
 		else
 		{
-			tiny_string clsname = asAtomHandler::getObject(o) ? asAtomHandler::getObject(o)->getClassName() : "";
-			createError<TypeError>(wrk,kCheckTypeFailedError, clsname,
-								  Class<T>::getQualifiedClassName());
+			tiny_string clsname;
+			if (asAtomHandler::getObject(o))
+			{
+				clsname = asAtomHandler::getObject(o)->getClass()->getQualifiedClassName(true);
+				// it seems adobe for some reason adds the object pointer to the class name
+				char buf[300];
+				sprintf(buf,"@%lx",o.uintval);
+				clsname += buf;
+			}
+			tiny_string tname = "__AS3__.vec.";
+			tname += Class<T>::getQualifiedClassName();
+			createError<TypeError>(wrk,kCheckTypeFailedError, clsname,tname);
 		}
 		return false;
 	}
@@ -112,27 +131,26 @@ class Template : public Template_base
 public:
 	Template(ASWorker* wrk,QName name) : Template_base(wrk,name) {}
 
-	QName getQName(SystemState* sys, const std::vector<const Type*>& types)
+	QName getQName(SystemState* sys, const std::vector<Type*>& types)
 	{
 		//This is the naming scheme that the ABC compiler uses,
 		//and we need to stay in sync here
 		tiny_string name = ClassName<T>::name;
 		for(size_t i=0;i<types.size();++i)
 		{
-			name += "$";
+			name += ".<";
 			name += types[i]->getName();
+			name += ">";
 		}
 		QName ret(sys->getUniqueStringId(name),sys->getUniqueStringId(ClassName<T>::ns));
 		return ret;
 	}
 
-	Class_base* applyType(const std::vector<const Type*>& types,_NR<ApplicationDomain> applicationDomain)
+	Class_base* applyType(const std::vector<Type*>& types,ApplicationDomain* appdomain)
 	{
-		_NR<ApplicationDomain> appdomain = applicationDomain;
-		
 		// if type is a builtin class, it is handled in the systemDomain
-		if (appdomain.isNull() || (types.size() > 0 && types[0]->isBuiltin()))
-			appdomain = _MR(getSys()->systemDomain);
+		if (!appdomain || (types.size() > 0 && types[0]->isBuiltin()))
+			appdomain = getSys()->systemDomain;
 		QName instantiatedQName = getQName(appdomain->getSystemState(),types);
 
 		std::map<QName, Class_base*>::iterator it=appdomain->instantiatedTemplates.find(instantiatedQName);
@@ -159,10 +177,9 @@ public:
 		ret->incRef();
 		return ret;
 	}
-	Class_base* applyTypeByQName(const QName& qname,_NR<ApplicationDomain> applicationDomain)
+	Class_base* applyTypeByQName(const QName& qname,ApplicationDomain* appdomain)
 	{
-		const std::vector<const Type*> types;
-		_NR<ApplicationDomain> appdomain = applicationDomain;
+		const std::vector<Type*> types;
 		std::map<QName, Class_base*>::iterator it=appdomain->instantiatedTemplates.find(qname);
 		Class<T>* ret=nullptr;
 		if(it==appdomain->instantiatedTemplates.end()) //This class is not yet in the map, create it
@@ -183,41 +200,41 @@ public:
 		return ret;
 	}
 
-	static Ref<Class_base> getTemplateInstance(RootMovieClip* root,const Type* type,_NR<ApplicationDomain> appdomain)
+	static Ref<Class_base> getTemplateInstance(Type* type,ApplicationDomain* appdomain)
 	{
-		std::vector<const Type*> t(1,type);
-		Template<T>* templ=getTemplate(root);
+		std::vector<Type*> t(1,type);
+		Template<T>* templ=getTemplate(appdomain);
 		Ref<Class_base> ret=_MR(templ->applyType(t, appdomain));
 		templ->decRef();
 		return ret;
 	}
 
-	static Ref<Class_base> getTemplateInstance(RootMovieClip* root,const QName& qname, ABCContext* context,_NR<ApplicationDomain> appdomain)
+	static Ref<Class_base> getTemplateInstance(const QName& qname, ABCContext* context,ApplicationDomain* appdomain)
 	{
-		Template<T>* templ=getTemplate(root);
+		Template<T>* templ=getTemplate(appdomain);
 		Ref<Class_base> ret=_MR(templ->applyTypeByQName(qname,appdomain));
 		ret->context = context;
 		templ->decRef();
 		return ret;
 	}
-	static void getInstanceS(ASWorker* wrk,asAtom& ret, RootMovieClip* root,const Type* type,_NR<ApplicationDomain> appdomain)
+	static void getInstanceS(ASWorker* wrk,asAtom& ret,Type* type,ApplicationDomain* appdomain)
 	{
-		getTemplateInstance(root,type,appdomain).getPtr()->getInstance(wrk,ret,true,nullptr,0);
+		getTemplateInstance(type,appdomain).getPtr()->getInstance(wrk,ret,true,nullptr,0);
 	}
 
-	static Template<T>* getTemplate(RootMovieClip* root,const QName& name)
+	static Template<T>* getTemplate(ApplicationDomain* appDomain,const QName& name)
 	{
-		std::map<QName, Template_base*>::iterator it=root->templates.find(name);
+		std::map<QName, Template_base*>::iterator it=appDomain->templates.find(name);
 		Template<T>* ret=nullptr;
-		if(it==root->templates.end()) //This class is not yet in the map, create it
+		if(it==appDomain->templates.end()) //This class is not yet in the map, create it
 		{
-			MemoryAccount* m = root->getSystemState()->allocateMemoryAccount(name.getQualifiedName(root->getSystemState()));
-			ASWorker* wrk = root->getInstanceWorker();
+			MemoryAccount* m = appDomain->getSystemState()->allocateMemoryAccount(name.getQualifiedName(appDomain->getSystemState()));
+			ASWorker* wrk = appDomain->getInstanceWorker();
 			ret=new (m) Template<T>(wrk,name);
 			ret->prototype = _MNR(new_objectPrototype(wrk));
-			ret->addPrototypeGetter(root->getSystemState());
+			ret->addPrototypeGetter(appDomain->getSystemState());
 			ret->setRefConstant();
-			root->templates.insert(std::make_pair(name,ret));
+			appDomain->templates.insert(std::make_pair(name,ret));
 		}
 		else
 			ret=static_cast<Template<T>*>(it->second);
@@ -226,17 +243,18 @@ public:
 		return ret;
 	}
 
-	static Template<T>* getTemplate(RootMovieClip* root)
+	static Template<T>* getTemplate(ApplicationDomain* appDomain)
 	{
-		return getTemplate(root,QName(root->getSystemState()->getUniqueStringId(ClassName<T>::name),root->getSystemState()->getUniqueStringId(ClassName<T>::ns)));
+		return getTemplate(appDomain,QName(appDomain->getSystemState()->getUniqueStringId(ClassName<T>::name),appDomain->getSystemState()->getUniqueStringId(ClassName<T>::ns)));
 	}
 };
 
 
 class Vector: public ASObject
 {
-	const Type* vec_type;
+	Type* vec_type;
 	bool fixed;
+	bool hasDuplicates;
 	std::vector<asAtom, reporter_allocator<asAtom>> vec;
 	int capIndex(int i) const;
 	class sortComparatorDefault
@@ -245,21 +263,24 @@ class Vector: public ASObject
 		bool isNumeric;
 		bool isCaseInsensitive;
 		bool isDescending;
+		Vector* src;
 	public:
-		sortComparatorDefault(bool n, bool ci, bool d):isNumeric(n),isCaseInsensitive(ci),isDescending(d){}
+		sortComparatorDefault(bool n, bool ci, bool d,Vector* s):isNumeric(n),isCaseInsensitive(ci),isDescending(d),src(s){}
 		bool operator()(const asAtom& d1, const asAtom& d2);
 	};
 	asAtom getDefaultValue();
+	bool checkValue(asAtom& o, bool allowconversion);
 public:
 	class sortComparatorWrapper
 	{
 	private:
 		asAtom comparator;
+	Vector* src;
 	public:
-		sortComparatorWrapper(asAtom c):comparator(c){}
+		sortComparatorWrapper(asAtom c,Vector* s):comparator(c),src(s){}
 		number_t compare(const asAtom& d1, const asAtom& d2);
 	};
-	Vector(ASWorker* wrk,Class_base* c, const Type *vtype=nullptr);
+	Vector(ASWorker* wrk,Class_base* c, Type *vtype=nullptr);
 	~Vector();
 	bool destruct() override;
 	void finalize() override;
@@ -269,8 +290,9 @@ public:
 	static void sinit(Class_base* c);
 	static void generator(asAtom& ret, ASWorker* wrk, asAtom& o_class, asAtom* args, const unsigned int argslen);
 
-	void setTypes(const std::vector<const Type*>& types);
+	void setTypes(const std::vector<Type*>& types);
 	bool sameType(const Class_base* cls) const;
+	Class_base* getType() const { return (Class_base*)vec_type; }
 
 	//Overloads
 	tiny_string toString();
@@ -314,6 +336,7 @@ public:
 	void throwRangeError(int index);
 	
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype, ASWorker* wrk) override;
+	bool deleteVariableByMultiname(const multiname& name, ASWorker* wrk) override;
 	GET_VARIABLE_RESULT getVariableByMultiname(asAtom& ret, const multiname& name, GET_VARIABLE_OPTION opt, ASWorker* wrk) override;
 	GET_VARIABLE_RESULT getVariableByInteger(asAtom& ret, int index, GET_VARIABLE_OPTION opt,ASWorker* wrk) override;
 	FORCE_INLINE void getVariableByIntegerDirect(asAtom& ret, int index, ASWorker* wrk)
@@ -323,7 +346,7 @@ public:
 		else
 			getVariableByIntegerIntern(ret,index,GET_VARIABLE_OPTION::NONE,wrk);
 	}
-	static bool isValidMultiname(SystemState* sys, const multiname& name, uint32_t& index, bool *isNumber = nullptr);
+	static bool isValidMultiname(ASWorker* wrk, const multiname& name, uint32_t& index, bool *isNumber = nullptr);
 
 	tiny_string toJSON(std::vector<ASObject *> &path, asAtom replacer, const tiny_string &spaces,const tiny_string& filter) override;
 
@@ -339,6 +362,7 @@ public:
 	{
 		return vec.at(index);
 	}
+	bool ensureLength(uint32_t len);
 	void set(uint32_t index, asAtom v)
 	{
 		if (index < size())
@@ -360,6 +384,7 @@ public:
 	//Takes ownership of o.
 	void append(asAtom& o);
 	void setFixed(bool v) { fixed = v; }
+	bool isFixed() const { return fixed; }
 	
 	void remove(ASObject* o);
 
@@ -387,6 +412,7 @@ public:
 	ASFUNCTION_ATOM(lastIndexOf);
 	ASFUNCTION_ATOM(_map);
 	ASFUNCTION_ATOM(_toString);
+	ASFUNCTION_ATOM(_toLocaleString);
 	ASFUNCTION_ATOM(slice);
 	ASFUNCTION_ATOM(every);
 	ASFUNCTION_ATOM(some);

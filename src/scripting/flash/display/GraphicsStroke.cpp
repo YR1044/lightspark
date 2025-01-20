@@ -19,6 +19,7 @@
 
 #include <limits>
 #include "scripting/flash/display/GraphicsStroke.h"
+#include "scripting/flash/display/Graphics.h"
 #include "scripting/flash/display/IGraphicsFill.h"
 #include "scripting/class.h"
 #include "scripting/argconv.h"
@@ -58,8 +59,6 @@ void GraphicsStroke::finalize()
 
 bool GraphicsStroke::countCylicMemberReferences(garbagecollectorstate& gcstate)
 {
-	if (gcstate.checkAncestors(this))
-		return false;
 	bool ret = ASObject::countCylicMemberReferences(gcstate);
 	if (fill)
 		ret = fill->countAllCylicMemberReferences(gcstate) || ret;
@@ -98,7 +97,7 @@ void GraphicsStroke::validateFill(_NR<ASObject> oldValue)
 	}
 }
 
-void GraphicsStroke::appendToTokens(std::vector<uint64_t>& tokens, Graphics* graphics)
+void GraphicsStroke::appendToTokens(tokensVector& tokens, Graphics* graphics)
 {
 	LINESTYLE2 style(0xff);
 	style.Width = thickness;
@@ -112,7 +111,6 @@ void GraphicsStroke::appendToTokens(std::vector<uint64_t>& tokens, Graphics* gra
 		style.HasFillFlag = true;
 		style.FillType = gfill->toFillStyle();
 	}
-
-	tokens.emplace_back(GeomToken(SET_STROKE).uval);
-	tokens.emplace_back(GeomToken(graphics->addLineStyle(style)).uval);
+	tokens.filltokens->tokens.emplace_back(GeomToken(SET_STROKE).uval);
+	tokens.filltokens->tokens.emplace_back(GeomToken(graphics->addLineStyle(style)).uval);
 }

@@ -20,8 +20,10 @@
 #ifndef SCRIPTING_ABCUTILS_H
 #define SCRIPTING_ABCUTILS_H 1
 
+#include "asobject.h"
 #include "smartrefs.h"
 #include "errorconstants.h"
+#include "utils/timespec.h"
 
 namespace lightspark
 {
@@ -62,12 +64,12 @@ struct call_context
 	bool* scope_stack_dynamic;
 	asAtom** localslots;
 	method_info* mi;
-	/* This is the function's inClass that is currently executing. It is used
-	 * by {construct,call,get,set}Super
+	/* This is the function that is currently executing.
 	 * */
-	Class_base* inClass;
+	SyntheticFunction* function;
 	SystemState* sys;
 	class ASWorker* worker;
+	bool explicitConstruction;
 	/* Current namespace set by 'default xml namespace = ...'.
 	 * Defaults to empty string according to ECMA-357 13.1.1.1
 	 */
@@ -79,7 +81,7 @@ struct call_context
 		max_stackp(nullptr),
 		parent_scope_stack(nullptr),curr_scope_stack(0),argarrayposition(-1),
 		scope_stack(nullptr),scope_stack_dynamic(nullptr),localslots(nullptr),mi(_mi),
-		inClass(nullptr),sys(nullptr),worker(nullptr),defaultNamespaceUri(0),exceptionthrown(nullptr)
+		function(nullptr),sys(nullptr),worker(nullptr),explicitConstruction(false),defaultNamespaceUri(0),exceptionthrown(nullptr)
 	{
 	}
 	static void handleError(int errorcode);
@@ -93,6 +95,8 @@ struct call_context
 	}
 };
 typedef ASObject* (*synt_function)(call_context* cc);
+typedef void (*as_atom_function)(asAtom&, ASWorker*, asAtom&, asAtom*, const unsigned int);
+
 
 class AVM1context
 {
@@ -100,7 +104,7 @@ friend class AVM1Function;
 private:
 	std::vector<uint32_t> avm1strings;
 public:
-	AVM1context():keepLocals(true) {}
+	AVM1context():keepLocals(true), callDepth(0), actionsExecuted(0),swfversion(0),exceptionthrown(nullptr), callee(nullptr) {}
 	void AVM1ClearConstants()
 	{
 		avm1strings.clear();
@@ -117,6 +121,12 @@ public:
 		return asAtomHandler::undefinedAtom;
 	}
 	bool keepLocals;
+	size_t callDepth;
+	size_t actionsExecuted;
+	TimeSpec startTime;
+	uint8_t swfversion;
+	ASObject* exceptionthrown;
+	AVM1Function* callee;
 };
 
 

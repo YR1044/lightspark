@@ -23,13 +23,13 @@
 #include <vector>
 #include "backends/geometry.h"
 #include "backends/graphics.h"
-#include "scripting/flash/display/DisplayObject.h"
-#include "scripting/flash/display/Graphics.h"
+#include "forwards/scripting/toplevel/Vector.h"
+#include "forwards/scripting/flash/display/DisplayObject.h"
+#include "forwards/scripting/flash/display/Graphics.h"
 
 namespace lightspark
 {
-
-class DisplayObject;
+class RenderContext;
 class InteractiveObject;
 class DefineMorphShapeTag;
 
@@ -40,8 +40,6 @@ class TokenContainer
 	friend class TextField;
 public:
 	DisplayObject* owner;
-	number_t redMultiplier,greenMultiplier,blueMultiplier,alphaMultiplier;
-	number_t redOffset,greenOffset,blueOffset,alphaOffset;
 	/* multiply shapes' coordinates by this
 	 * value to get pixel.
 	 * DefineShapeTags set a scaling of 1/20,
@@ -51,29 +49,27 @@ public:
 	 * the tokens are cleared and scaling is set
 	 * to 1.0f.
 	 */
-	tokensVector tokens;
+	tokensVector* tokens;
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
-					 tokensVector& tokens, const std::list<FILLSTYLE>& fillStyles,
-					 const MATRIX& matrix = MATRIX(), const std::list<LINESTYLE2>& lineStyles = std::list<LINESTYLE2>(), const RECT &shapebounds= RECT());
+					tokensVector& tokens,bool isGlyph,
+					const MATRIX& matrix,
+					const std::list<FILLSTYLE>& fillStyles=std::list<FILLSTYLE>(),
+					const std::list<LINESTYLE2>& lineStyles = std::list<LINESTYLE2>(), const RECT &shapebounds= RECT());
 	static void FromDefineMorphShapeTagToShapeVector(DefineMorphShapeTag *tag,
-					 tokensVector& tokens, uint16_t ratio);
-	static void getTextureSize(std::vector<uint64_t>& tokens, int *width, int *height);
+					tokensVector& tokens, uint16_t ratio);
+	static void getTextureSize(TokenList& tokens, int *width, int *height);
 	static bool boundsRectFromTokens(const tokensVector& tokens,float scaling, number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax);
-	uint16_t getCurrentLineWidth() const;
 	float scaling;
 	bool renderWithNanoVG;
+	void fillGraphicsData(Vector* v, _NR<tokenListRef> filltokens, _NR<tokenListRef> stroketokens, int startx, int starty);
 protected:
 	TokenContainer(DisplayObject* _o);
-	TokenContainer(DisplayObject* _o, const tokensVector& _tokens, float _scaling);
-	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix, SMOOTH_MODE smoothing, InvalidateQueue* q, _NR<DisplayObject>* cachedBitmap, bool fromgraphics);
+	TokenContainer(DisplayObject* _o, tokensVector* _tokens, float _scaling);
+	IDrawable* invalidate(SMOOTH_MODE smoothing, bool fromgraphics, const tokensVector& tokens);
 	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false);
-	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		return boundsRectFromTokens(tokens,scaling,xmin,xmax,ymin,ymax);
-	}
-	bool hitTestImpl(number_t x, number_t y) const;
-	bool renderImpl(RenderContext& ctxt);
-	bool tokensEmpty() const { return tokens.empty(); }
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, tokensVector* tk);
+	bool hitTestImpl(const Vector2f& point, tokensVector* tk) const;
+	bool tokensEmpty() const { return !tokens || tokens->empty(); }
 };
 
 }

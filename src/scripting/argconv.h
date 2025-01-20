@@ -2,6 +2,7 @@
     Lightspark, a free flash player implementation
 
     Copyright (C) 2011-2013  Matthias Gehre (M.Gehre@gmx.de)
+    Copyright (C) 2024  mr b0nk 500 (b0nk@b0nk.xyz)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,9 +21,14 @@
 #ifndef SCRIPTING_ARGCONV_H
 #define SCRIPTING_ARGCONV_H 1
 
+#include "backends/geometry.h"
+#include "scripting/flash/geom/Point.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/Error.h"
+#include "scripting/toplevel/Number.h"
+#include "swf.h"
 
 /* Usage of ARG_UNPACK:
  * You have to use it within a ASFUNCTIONBODY_ATOM() { }, because it uses the implicit arguments 'args' and 'argslen'.
@@ -30,7 +36,8 @@
  * int32_t i;
  * bool b;
  * _NR<DisplayObject> o;
- * ARG_UNPACK (i) (b) (o);
+ * asAtom a = asAtomHandler::invalidAtom;
+ * ARG_CHECK(ARG_UNPACK (i) (b) (o) (a));
  * which coerces the given arguments implicitly (according to ecma) to the types Integer, Boolean, DisplayObject and then puts them
  * into the given variables.
  * ATTENTION: The object 'o' is the same as the argument passed into the function, so changing it will be visible for the caller.
@@ -39,7 +46,7 @@
  * will be emitted if more than the unpacked arguments are provided by the caller.
  *
  * To specify default values, use the (var, defvalue) operator like
- * ARG_UNPACK (i) (b,true) (o,NullRef);
+ * ARG_CHECK(ARG_UNPACK (i) (b,true) (o,NullRef) (a,asAtomHandler::nullAtom));
  * this will work as above if all arguments are supplied. When the second argument is not supplied, no error is thrown and
  * b is set to 'true'. If the third argument is not supplied, not error is thrown and o is set to NullRef. Note that you cannot
  * put a Null into DisplayObject, as Null derives directly from ASObject (i.e. Null is not a subclass DisplayObject).
@@ -77,7 +84,7 @@ public:
 			createError<ArgumentError>(wrk,kCheckTypeFailedError,
 									  asAtomHandler::toObject(obj,wrk)->getClassName(),
 									  "?"); // TODO
-			return asAtomHandler::undefinedAtom;
+			return asAtomHandler::invalidAtom;
 		}
 		ASATOM_ADDSTOREDMEMBER(obj);
 		return obj;
@@ -125,7 +132,7 @@ public:
 		if(!asAtomHandler::is<T>(obj))
 		{
 			createError<ArgumentError>(wrk,kCheckTypeFailedError,
-												  asAtomHandler::toObject(obj,wrk)->getClassName(),
+												  asAtomHandler::getClass(obj,wrk->getSystemState())->getQualifiedClassName(),
 												  Class<T>::getClass(wrk->getSystemState())->getQualifiedClassName());
 			return NullRef;
 		}
@@ -232,6 +239,54 @@ inline RGB lightspark::ArgumentConversionAtom<RGB>::toConcrete(ASWorker* wrk,asA
 }
 template<>
 inline RGB lightspark::ArgumentConversionAtom<RGB>::failValue() { return RGB(); }
+template<>
+inline AS3KeyCode lightspark::ArgumentConversionAtom<AS3KeyCode>::toConcrete(ASWorker* wrk,asAtom obj,const AS3KeyCode& v)
+{
+	return AS3KeyCode(asAtomHandler::toUInt(obj));
+}
+template<>
+inline AS3KeyCode lightspark::ArgumentConversionAtom<AS3KeyCode>::failValue() { return AS3KEYCODE_UNKNOWN; }
+
+template<>
+inline Vector2f lightspark::ArgumentConversionAtom<Vector2f>::toConcrete(ASWorker* wrk, asAtom obj, const Vector2f& v)
+{
+	bool needsAS3 = wrk->needsActionScript3();
+	auto swfVersion = wrk->AVM1getSwfVersion();
+	if (needsAS3 || asAtomHandler::is<Point>(obj))
+	{
+		auto point = asAtomHandler::as<Point>(obj);
+		return Vector2f(point->getX(), point->getY());
+	}
+	else if (asAtomHandler::isObject(obj))
+	{
+		auto _obj = asAtomHandler::getObjectNoCheck(obj);
+		asAtom x = asAtomHandler::undefinedAtom;
+		asAtom y = asAtomHandler::undefinedAtom;
+
+		multiname m(nullptr);
+		m.name_type=multiname::NAME_STRING;
+		m.isAttribute = false;
+
+		m.name_s_id=wrk->getSystemState()->getUniqueStringId("x");
+		_obj->getVariableByMultiname(x, m, GET_VARIABLE_OPTION::NONE, wrk);
+		m.name_s_id=wrk->getSystemState()->getUniqueStringId("y");
+		_obj->getVariableByMultiname(y, m, GET_VARIABLE_OPTION::NONE, wrk);
+
+		return Vector2f
+		(
+			asAtomHandler::AVM1toNumber(x, swfVersion),
+			asAtomHandler::AVM1toNumber(y, swfVersion)
+		);
+	}
+	auto _default = asAtomHandler::AVM1toNumber(asAtomHandler::undefinedAtom, swfVersion);
+	return Vector2f(_default, _default);
+}
+template<>
+inline Vector2f lightspark::ArgumentConversionAtom<Vector2f>::failValue()
+{
+	auto _default = Number::NaN;
+	return Vector2f(_default, _default);
+}
 
 template<>
 inline void lightspark::ArgumentConversionAtom<int32_t>::toAbstract(asAtom& ret, ASWorker* wrk,const int32_t& val)
@@ -268,13 +323,29 @@ inline void lightspark::ArgumentConversionAtom<RGB>::toAbstract(asAtom& ret, ASW
 {
 	asAtomHandler::setUInt(ret,wrk,val.toUInt());
 }
+
+template<>
+inline void lightspark::ArgumentConversionAtom<AS3KeyCode>::toAbstract(asAtom& ret, ASWorker* wrk,const AS3KeyCode& val)
+{
+	asAtomHandler::setUInt(ret,wrk,val);
+}
+
+template<>
+inline void lightspark::ArgumentConversionAtom<Vector2f>::toAbstract(asAtom& ret, ASWorker* wrk, const Vector2f& val)
+{
+	ret = asAtomHandler::fromObject(Class<Point>::getInstanceS(wrk, val.x, val.y));
+}
 #define ARG_CHECK(u) if (u.isInvalid()) return;
 #ifndef NDEBUG
-#define ARG_UNPACK ArgUnpackAtom(wrk,args,argslen,false)
-#define ARG_UNPACK_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen,true)
+#define ARG_UNPACK ArgUnpackAtom(wrk,args,argslen,true,false)
+#define ARG_UNPACK_NO_ERROR ArgUnpackAtom(wrk,args,argslen,false,false)
+#define ARG_UNPACK_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen,true,true)
+#define ARG_UNPACK_NO_ERROR_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen,false,true)
 #else
-#define ARG_UNPACK ArgUnpackAtom(wrk,args,argslen)
-#define ARG_UNPACK_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen)
+#define ARG_UNPACK ArgUnpackAtom(wrk,args,argslen,true)
+#define ARG_UNPACK_NO_ERROR ArgUnpackAtom(wrk,args,argslen,false)
+#define ARG_UNPACK_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen,true)
+#define ARG_UNPACK_NO_ERROR_MORE_ALLOWED ArgUnpackAtom(wrk,args,argslen,false)
 #endif
 class ArgUnpackAtom
 {
@@ -283,14 +354,15 @@ private:
 	asAtom* args;
 	int argslen;
 	bool invalid;
+	bool canError;
 #ifndef NDEBUG
 	bool moreAllowed;
 #endif
 public:
 #ifndef NDEBUG
-	ArgUnpackAtom(ASWorker* _w,asAtom* _args, int _argslen, bool _moreAllowed) : wrk(_w),args(_args), argslen(_argslen),invalid(false), moreAllowed(_moreAllowed)
+	ArgUnpackAtom(ASWorker* _w,asAtom* _args, int _argslen, bool _canError, bool _moreAllowed) : wrk(_w),args(_args), argslen(_argslen),invalid(false), canError(_canError), moreAllowed(_moreAllowed)
 #else
-	ArgUnpackAtom(ASWorker* _w,asAtom* _args, int _argslen) : wrk(_w),args(_args), argslen(_argslen),invalid(false)
+	ArgUnpackAtom(ASWorker* _w,asAtom* _args, int _argslen, bool _canError) : wrk(_w),args(_args), argslen(_argslen),invalid(false), canError(_canError)
 #endif
 	{
 		
@@ -302,7 +374,8 @@ public:
 		if(argslen == 0)
 		{
 			v = ArgumentConversionAtom<T>::failValue();
-			createError<ArgumentError>(wrk,kWrongArgumentCountError, "object", "?", "?");
+			if (canError)
+				createError<ArgumentError>(wrk,kWrongArgumentCountError, "object", "?", "?");
 			invalid=true;
 		}
 		if(!invalid)

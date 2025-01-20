@@ -24,12 +24,15 @@
 #include "compat.h"
 #include "parsing/amf3_generator.h"
 #include "scripting/argconv.h"
+#include "scripting/toplevel/AVM1Function.h"
+#include "scripting/toplevel/Array.h"
 #include "scripting/toplevel/Number.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
 #include "scripting/flash/system/flashsystem.h"
 #include "scripting/flash/errors/flasherrors.h"
 #include "scripting/flash/utils/IntervalManager.h"
+#include "scripting/flash/display/DisplayObject.h"
 #include <sstream>
 #include <zlib.h>
 #include <glib.h>
@@ -98,10 +101,10 @@ void IDataOutput::linkTraits(Class_base* c)
 
 ASFUNCTIONBODY_ATOM(lightspark,getQualifiedClassName)
 {
+	assert_and_throw(args && argslen==1);
 	//CHECK: what to do if ns is empty
-	ASObject* target=asAtomHandler::toObject(args[0],wrk);
 	Class_base* c;
-	switch(target->getObjectType())
+	switch(asAtomHandler::getObjectType(args[0]))
 	{
 		case T_NULL:
 			ret = asAtomHandler::fromString(wrk->getSystemState(),"null");
@@ -111,24 +114,24 @@ ASFUNCTIONBODY_ATOM(lightspark,getQualifiedClassName)
 			ret = asAtomHandler::fromString(wrk->getSystemState(),"void");
 			return;
 		case T_CLASS:
-			c=static_cast<Class_base*>(target);
+			c=asAtomHandler::as<Class_base>(args[0]);
 			break;
 		case T_NUMBER:
-			if (target->as<Number>()->isfloat)
-				c=target->getClass();
-			else if (target->toInt64() > INT32_MIN && target->toInt64()< INT32_MAX)
-				c=Class<Integer>::getRef(target->getSystemState()).getPtr();
-			else if (target->toInt64() > 0 && target->toInt64()< UINT32_MAX)
-				c=Class<UInteger>::getRef(target->getSystemState()).getPtr();
+			if (asAtomHandler::as<Number>(args[0])->isfloat)
+				c=Class<Number>::getRef(wrk->getSystemState()).getPtr();
+			else if (asAtomHandler::toInt64(args[0]) > INT32_MIN && asAtomHandler::toInt64(args[0])< INT32_MAX)
+				c=Class<Integer>::getRef(wrk->getSystemState()).getPtr();
+			else if (asAtomHandler::toInt64(args[0]) > 0 && asAtomHandler::toInt64(args[0])< UINT32_MAX)
+				c=Class<UInteger>::getRef(wrk->getSystemState()).getPtr();
 			else 
-				c=target->getClass();
+				c=asAtomHandler::getClass(args[0],wrk->getSystemState());
 			break;
 		case T_TEMPLATE:
-			ret = asAtomHandler::fromString(wrk->getSystemState(), target->as<Template_base>()->getTemplateName().getQualifiedName(wrk->getSystemState()));
+			ret = asAtomHandler::fromString(wrk->getSystemState(), asAtomHandler::as<Template_base>(args[0])->getTemplateName().getQualifiedName(wrk->getSystemState()));
 			return;
 		default:
-			assert_and_throw(target->getClass());
-			c=target->getClass();
+			assert_and_throw(asAtomHandler::getClass(args[0],wrk->getSystemState()));
+			c=asAtomHandler::getClass(args[0],wrk->getSystemState());
 			break;
 	}
 
@@ -137,16 +140,17 @@ ASFUNCTIONBODY_ATOM(lightspark,getQualifiedClassName)
 
 ASFUNCTIONBODY_ATOM(lightspark,getQualifiedSuperclassName)
 {
+	assert_and_throw(args && argslen==1);
 	//CHECK: what to do is ns is empty
-	ASObject* target=asAtomHandler::toObject(args[0],wrk);
 	Class_base* c;
-	if(target->getObjectType()!=T_CLASS)
+	if(asAtomHandler::getObjectType(args[0])!=T_CLASS)
 	{
-		assert_and_throw(target->getClass());
-		c=target->getClass()->super.getPtr();
+		c = asAtomHandler::getClass(args[0],wrk->getSystemState());
+		assert_and_throw(c);
+		c=c->super.getPtr();
 	}
 	else
-		c=static_cast<Class_base*>(target)->super.getPtr();
+		c=asAtomHandler::as<Class_base>(args[0])->super.getPtr();
 
 	if (!c)
 		asAtomHandler::setNull(ret);
@@ -165,11 +169,8 @@ ASFUNCTIONBODY_ATOM(lightspark,getDefinitionByName)
 	tiny_string tmpName;
 	stringToQName(tmp,tmpName,nsName);
 	name.name_s_id=wrk->getSystemState()->getUniqueStringId(tmpName);
-	if (nsName != "")
-	{
-		name.ns.push_back(nsNameAndKind(wrk->getSystemState(),nsName,NAMESPACE));
-		name.hasEmptyNS=false;
-	}
+	name.ns.push_back(nsNameAndKind(wrk->getSystemState(),nsName,NAMESPACE));
+	name.hasEmptyNS=nsName.empty();
 
 	LOG(LOG_CALLS,"Looking for definition of " << name);
 	ASObject* target;
@@ -181,11 +182,11 @@ ASFUNCTIONBODY_ATOM(lightspark,getDefinitionByName)
 
 	if(asAtomHandler::isInvalid(ret))
 	{
-		createError<ReferenceError>(wrk,kClassNotFoundError, tmp);
+		ret = asAtomHandler::undefinedAtom;
+		createError<ReferenceError>(wrk,kUndefinedVarError, tmp);
 		return;
 	}
-
-	assert_and_throw(asAtomHandler::isClass(ret));
+	
 	assert(!asAtomHandler::getObject(ret)->is<Class_inherit>() || asAtomHandler::getObject(ret)->getInstanceWorker() == wrk);
 
 	LOG(LOG_CALLS,"Getting definition for " << name<<" "<<asAtomHandler::toDebugString(ret)<<" "<<asAtomHandler::getObject(ret)->getInstanceWorker());
@@ -195,7 +196,10 @@ ASFUNCTIONBODY_ATOM(lightspark,getDefinitionByName)
 ASFUNCTIONBODY_ATOM(lightspark,describeType)
 {
 	assert_and_throw(argslen>=1);
-	ret = asAtomHandler::fromObject(asAtomHandler::toObject(args[0],wrk)->describeType(wrk));
+	ASObject* o = asAtomHandler::toObject(args[0],wrk);
+	if (o->is<Class_inherit>())
+		o->as<Class_inherit>()->checkScriptInit();
+	ret = asAtomHandler::fromObject(o->describeType(wrk));
 }
 
 ASFUNCTIONBODY_ATOM(lightspark,describeTypeJSON)
@@ -203,7 +207,7 @@ ASFUNCTIONBODY_ATOM(lightspark,describeTypeJSON)
 	_NR<ASObject> o;
 	uint32_t flags;
 	ARG_CHECK(ARG_UNPACK(o)(flags));
-	ASObject* res = Class<ASObject>::getInstanceS(wrk);
+	ASObject* res = new_asobject(wrk);
 
 	if (o)
 	{
@@ -227,7 +231,7 @@ ASFUNCTIONBODY_ATOM(lightspark,describeTypeJSON)
 		v = asAtomHandler::fromBool(!cls->isFinal);
 		res->setVariableByMultiname(m,v,ASObject::CONST_ALLOWED,nullptr,wrk);
 	
-		ASObject* traits = Class<ASObject>::getInstanceS(wrk);
+		ASObject* traits = new_asobject(wrk);
 	
 		bool INCLUDE_BASES = flags & 0x0002;
 		bool INCLUDE_INTERFACES = flags & 0x0004;
@@ -281,14 +285,15 @@ ASFUNCTIONBODY_ATOM(lightspark,describeTypeJSON)
 
 ASFUNCTIONBODY_ATOM(lightspark,getTimer)
 {
-	uint64_t res=compat_msectiming() - wrk->getSystemState()->startTime;
+	uint64_t res=wrk->getSystemState()->getCurrentTime_ms() - wrk->getSystemState()->startTime;
 	asAtomHandler::setInt(ret,wrk,(int32_t)res);
 }
 
 
 ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 {
-	assert_and_throw(argslen >= 2);
+	if (argslen < 2)
+		return;
 
 	uint32_t paramstart = 2;
 	asAtom func = args[0];
@@ -296,7 +301,8 @@ ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 	asAtom o = asAtomHandler::nullAtom;
 	if (!asAtomHandler::isFunction(args[0])) // AVM1 also allows setInterval with arguments object,functionname,interval,params...
 	{
-		assert_and_throw(argslen >= 3);
+		if (argslen < 3)
+			return;
 		paramstart = 3;
 		delayarg = 2;
 		ASObject* oref = asAtomHandler::toObject(args[0],wrk);
@@ -324,10 +330,11 @@ ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 			if (f)
 				func = asAtomHandler::fromObjectNoPrimitive(f);
 		}
-		assert_and_throw (asAtomHandler::isFunction(func));
+		if (!asAtomHandler::isFunction(func))
+			return;
 	}
 	if (!asAtomHandler::is<AVM1Function>(func))
-		o = asAtomHandler::getClosureAtom(func);
+		o = asAtomHandler::getClosureAtom(func,asAtomHandler::nullAtom);
 	else
 	{
 		// it seems that adobe uses the ObjectReference as "this" for the callback
@@ -355,7 +362,8 @@ ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 
 ASFUNCTIONBODY_ATOM(lightspark,setTimeout)
 {
-	assert_and_throw(argslen >= 2 && asAtomHandler::isFunction(args[0]));
+	if (argslen < 2 || !asAtomHandler::isFunction(args[0]))
+		return;
 
 	//Build arguments array
 	asAtom* callbackArgs = g_newa(asAtom,argslen-2);
@@ -368,8 +376,8 @@ ASFUNCTIONBODY_ATOM(lightspark,setTimeout)
 	}
 
 	asAtom o = asAtomHandler::nullAtom;
-	if (asAtomHandler::as<IFunction>(args[0])->closure_this)
-		o = asAtomHandler::fromObject(asAtomHandler::as<IFunction>(args[0])->closure_this);
+	if (asAtomHandler::isValid(asAtomHandler::as<IFunction>(args[0])->closure_this))
+		o = asAtomHandler::as<IFunction>(args[0])->closure_this;
 
 	//incRef the function
 	ASATOM_INCREF(args[0]);

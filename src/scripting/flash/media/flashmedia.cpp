@@ -17,6 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include "platforms/engineutils.h"
 #include "scripting/abc.h"
 #include "scripting/flash/media/flashmedia.h"
 #include "scripting/class.h"
@@ -24,6 +25,7 @@
 #include <iostream>
 #include "backends/audio.h"
 #include "backends/rendering.h"
+#include "backends/cachedsurface.h"
 #include "backends/streamcache.h"
 #include "scripting/argconv.h"
 #include "parsing/tags.h"
@@ -32,12 +34,14 @@
 #include "scripting/toplevel/UInteger.h"
 #include "scripting/flash/utils/ByteArray.h"
 #include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/geom/flashgeom.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include <unistd.h>
 
 using namespace lightspark;
 using namespace std;
 
-SoundTransform::SoundTransform(ASWorker* wrk,Class_base* c):ASObject(wrk,c,T_OBJECT,SUBTYPE_SOUNDTRANSFORM),volume(1.0),pan(0.0),leftToLeft(1.0),leftToRight(0),rightToLeft(0),rightToRight(1.0)
+SoundTransform::SoundTransform(ASWorker* wrk,Class_base* c):ASObject(wrk,c,T_OBJECT,SUBTYPE_SOUNDTRANSFORM),volume(100),leftToLeft(100),leftToRight(0),rightToLeft(0),rightToRight(100)
 {
 }
 
@@ -45,50 +49,146 @@ void SoundTransform::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->isReusable = true;
-	REGISTER_GETTER_SETTER(c,volume);
-	REGISTER_GETTER_SETTER(c,pan);
-	REGISTER_GETTER_SETTER(c,leftToLeft);
-	REGISTER_GETTER_SETTER(c,leftToRight);
-	REGISTER_GETTER_SETTER(c,rightToLeft);
-	REGISTER_GETTER_SETTER(c,rightToRight);
+	c->setDeclaredMethodByQName("pan","",c->getSystemState()->getBuiltinFunction(_get_pan,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("pan","",c->getSystemState()->getBuiltinFunction(_set_pan),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("volume","",c->getSystemState()->getBuiltinFunction(_get_volume,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("volume","",c->getSystemState()->getBuiltinFunction(_set_volume),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("leftToLeft","",c->getSystemState()->getBuiltinFunction(_get_leftToLeft,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("leftToLeft","",c->getSystemState()->getBuiltinFunction(_set_leftToLeft),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("leftToRight","",c->getSystemState()->getBuiltinFunction(_get_leftToRight,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("leftToRight","",c->getSystemState()->getBuiltinFunction(_set_leftToRight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rightToLeft","",c->getSystemState()->getBuiltinFunction(_get_rightToLeft,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rightToLeft","",c->getSystemState()->getBuiltinFunction(_set_rightToLeft),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rightToRight","",c->getSystemState()->getBuiltinFunction(_get_rightToRight,0,Class<Number>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rightToRight","",c->getSystemState()->getBuiltinFunction(_set_rightToRight),SETTER_METHOD,true);
 }
 
 bool SoundTransform::destruct()
 {
-	volume=1.0;
-	pan=0.0;
-	leftToLeft=1.0;
+	volume=100;
+	leftToLeft=100;
 	leftToRight=0;
 	rightToLeft=0;
-	rightToRight=1.0;
+	rightToRight=100;
 	return ASObject::destruct();
 }
 
-ASFUNCTIONBODY_GETTER_SETTER(SoundTransform,volume)
-ASFUNCTIONBODY_GETTER_SETTER(SoundTransform,pan)
-ASFUNCTIONBODY_GETTER_SETTER_NOT_IMPLEMENTED(SoundTransform,leftToLeft)
-ASFUNCTIONBODY_GETTER_SETTER_NOT_IMPLEMENTED(SoundTransform,leftToRight)
-ASFUNCTIONBODY_GETTER_SETTER_NOT_IMPLEMENTED(SoundTransform,rightToLeft)
-ASFUNCTIONBODY_GETTER_SETTER_NOT_IMPLEMENTED(SoundTransform,rightToRight)
+void SoundTransform::setPan(number_t pan)
+{
+	if (pan >= 0)
+	{
+		leftToLeft = 100-pan*100.0;
+		rightToRight = 100;
+	}
+	else
+	{
+		leftToLeft = 100;
+		rightToRight = 100+pan*100.0;
+	}
+	leftToRight = 0;
+	rightToLeft = 0;
+}
 
 ASFUNCTIONBODY_ATOM(SoundTransform,_constructor)
 {
 	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
-	ARG_CHECK(ARG_UNPACK(th->volume, 1.0)(th->pan, 0.0));
+	number_t pan;
+	ARG_CHECK(ARG_UNPACK(th->volume, 1.0)(pan, 0.0));
+	th->setPan(pan);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_pan)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	if (th->leftToRight != 0.0 || th->rightToLeft != 0.0)
+		asAtomHandler::setNumber(ret,wrk,0.0);
+	else
+	{
+		number_t n = number_t(th->leftToLeft/100.0);
+		asAtomHandler::setNumber(ret,wrk,1.0-n*n);
+	}
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_pan)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t pan;
+	ARG_CHECK(ARG_UNPACK(pan));
+	th->setPan(pan);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_volume)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t n = number_t(th->volume)/100.0;
+	asAtomHandler::setNumber(ret,wrk,n);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_volume)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t volume;
+	ARG_CHECK(ARG_UNPACK(volume));
+	th->volume = volume*100.0;
+}
+
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_leftToLeft)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	ret = asAtomHandler::fromNumber(wrk,number_t(th->leftToLeft)/100.0,false);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_leftToLeft)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t leftToLeft;
+	ARG_CHECK(ARG_UNPACK(leftToLeft));
+	th->leftToLeft = leftToLeft*100.0;
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_leftToRight)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	ret = asAtomHandler::fromNumber(wrk,number_t(th->leftToRight)/100.0,false);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_leftToRight)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t leftToRight;
+	ARG_CHECK(ARG_UNPACK(leftToRight));
+	th->leftToRight = leftToRight*100.0;
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_rightToLeft)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	ret = asAtomHandler::fromNumber(wrk,number_t(th->rightToLeft)/100.0,false);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_rightToLeft)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t rightToLeft;
+	ARG_CHECK(ARG_UNPACK(rightToLeft));
+	th->rightToLeft = rightToLeft*100.0;
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_get_rightToRight)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	ret = asAtomHandler::fromNumber(wrk,number_t(th->rightToRight)/100.0,false);
+}
+ASFUNCTIONBODY_ATOM(SoundTransform,_set_rightToRight)
+{
+	SoundTransform* th=asAtomHandler::as<SoundTransform>(obj);
+	number_t rightToRight;
+	ARG_CHECK(ARG_UNPACK(rightToRight));
+	th->rightToRight = rightToRight*100.0;
 }
 
 void Video::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 	c->isReusable=true;
-	c->setDeclaredMethodByQName("videoWidth","",Class<IFunction>::getFunction(c->getSystemState(),_getVideoWidth),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("videoHeight","",Class<IFunction>::getFunction(c->getSystemState(),_getVideoHeight),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(c->getSystemState(),Video::_getWidth),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(c->getSystemState(),Video::_setWidth),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(c->getSystemState(),Video::_getHeight),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(c->getSystemState(),Video::_setHeight),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("attachNetStream","",Class<IFunction>::getFunction(c->getSystemState(),attachNetStream),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(c->getSystemState(),clear),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("videoWidth","",c->getSystemState()->getBuiltinFunction(_getVideoWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("videoHeight","",c->getSystemState()->getBuiltinFunction(_getVideoHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",c->getSystemState()->getBuiltinFunction(Video::_getWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",c->getSystemState()->getBuiltinFunction(Video::_setWidth),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",c->getSystemState()->getBuiltinFunction(Video::_getHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",c->getSystemState()->getBuiltinFunction(Video::_setHeight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("attachNetStream","",c->getSystemState()->getBuiltinFunction(attachNetStream),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("clear","",c->getSystemState()->getBuiltinFunction(clear),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c, deblocking);
 	REGISTER_GETTER_SETTER(c, smoothing);
 }
@@ -111,9 +211,85 @@ void Video::finalize()
 	DisplayObject::finalize();
 }
 
+void Video::advanceFrame(bool implicit)
+{
+	if (!isRendering)
+		this->requestInvalidation(getSystemState());
+}
+
+void Video::refreshSurfaceState()
+{
+	DisplayObject::refreshSurfaceState();
+	if (!isRendering)
+	{
+		Locker l(mutex);
+		if (netStream && netStream->lockIfReady())
+		{
+			this->getCachedSurface()->tex = &netStream->getTexture();
+			//Get size
+			videoWidth=netStream->getVideoWidth();
+			videoHeight=netStream->getVideoHeight();
+			isRendering=true;
+			netStream->unlock();
+		}
+		if (embeddedVideoDecoder)
+		{
+			this->getCachedSurface()->tex = &embeddedVideoDecoder->getTexture();
+			videoWidth=videotag->Width;
+			videoHeight=videotag->Height;
+			isRendering=true;
+		}
+		this->getCachedSurface()->isChunkOwner=false;
+	}
+	else
+	{
+		Locker l(mutex);
+		if (!netStream && !embeddedVideoDecoder)
+		{
+			this->getCachedSurface()->tex = nullptr;
+			this->getCachedSurface()->isChunkOwner=false;
+			isRendering=false;
+		}
+	}
+	this->getCachedSurface()->getState()->matrix = MATRIX();
+}
+void Video::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
+{
+	hasChanged=true;
+	incRef();
+	q->addToInvalidateQueue(_MR(this));
+}
+IDrawable *Video::invalidate(bool smoothing)
+{
+	number_t x,y;
+	number_t width,height;
+	number_t bxmin=0,bxmax=0,bymin=0,bymax=0;
+	boundsRect(bxmin,bxmax,bymin,bymax,false);
+	MATRIX matrix = getMatrix();
+	
+	bool isMask=false;
+	MATRIX m;
+	m.scale(matrix.getScaleX(),matrix.getScaleY());
+	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,m);
+	
+	ColorTransformBase ct;
+	if (this->colorTransform)
+		ct=*this->colorTransform.getPtr();
+	
+	this->resetNeedsTextureRecalculation();
+	IDrawable* res = new RefreshableDrawable(x, y, ceil(width), ceil(height)
+											 , matrix.getScaleX(), matrix.getScaleY()
+											 , isMask, cacheAsBitmap
+											 , getScaleFactor(),getConcatenatedAlpha()
+											 , ct, smoothing ? SMOOTH_MODE::SMOOTH_ANTIALIAS:SMOOTH_MODE::SMOOTH_NONE,this->getBlendMode(),matrix);
+	res->getState()->isYUV=true;
+	return res;
+}
+
 void Video::resetDecoder()
 {
 	Locker l(mutex);
+	isRendering=false;
 	lastuploadedframe=UINT32_MAX;
 	if (embeddedVideoDecoder)
 	{
@@ -127,13 +303,14 @@ void Video::resetDecoder()
 
 Video::Video(ASWorker* wk, Class_base* c, uint32_t w, uint32_t h, DefineVideoStreamTag *v)
 	: DisplayObject(wk,c),width(w),height(h),videoWidth(0),videoHeight(0),
-	  netStream(NullRef),videotag(v),embeddedVideoDecoder(nullptr),lastuploadedframe(UINT32_MAX),deblocking(v ? v->VideoFlagsDeblocking:0),smoothing(v ? v->VideoFlagsSmoothing : false)
+	netStream(NullRef),videotag(v),embeddedVideoDecoder(nullptr),lastuploadedframe(UINT32_MAX),isRendering(false),
+	deblocking(v ? v->VideoFlagsDeblocking:0),smoothing(v ? v->VideoFlagsSmoothing : false)
 {
 	subtype=SUBTYPE_VIDEO;
 	if (videotag)
 	{
-		videoWidth=videotag->Width;
-		videoHeight=videotag->Height;
+		videoWidth=width=videotag->Width;
+		videoHeight=height=videotag->Height;
 	}
 }
 
@@ -169,7 +346,10 @@ void Video::checkRatio(uint32_t ratio, bool inskipping)
 					break;
 			}
 			if (ok)
+			{
 				embeddedVideoDecoder = new FFMpegVideoDecoder(lscodec,nullptr,0,videotag->loadedFrom->getFrameRate(),videotag);
+				this->requestInvalidation(getSystemState());
+			}
 			lastuploadedframe=UINT32_MAX;
 		}
 #endif
@@ -187,7 +367,17 @@ void Video::checkRatio(uint32_t ratio, bool inskipping)
 	}
 }
 
-void Video::afterLegacyDelete(DisplayObjectContainer *parent, bool inskipping)
+void Video::afterLegacyInsert()
+{
+	if(!getConstructIndicator() && !needsActionScript3())
+	{
+		asAtom obj = asAtomHandler::fromObjectNoPrimitive(this);
+		getClass()->handleConstruction(obj,nullptr,0,true);
+	}
+	DisplayObject::afterLegacyInsert();
+}
+
+void Video::afterLegacyDelete(bool inskipping)
 {
 	Locker l(mutex);
 	resetDecoder();
@@ -215,61 +405,10 @@ Video::~Video()
 {
 }
 
-bool Video::renderImpl(RenderContext& ctxt)
+bool Video::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, bool visibleOnly)
 {
-	Locker l(mutex);
-	if(skipRender())
+	if (visibleOnly && !this->isVisible())
 		return false;
-
-	//Video is especially optimized for GL rendering
-	//It needs special treatment for SOFTWARE contextes
-	if(ctxt.contextType != RenderContext::GL)
-	{
-		LOG(LOG_NOT_IMPLEMENTED, "Video::renderImpl on SOFTWARE context is not yet supported");
-		return false;
-	}
-
-	bool valid=false;
-	if(!netStream.isNull() && netStream->lockIfReady())
-	{
-		//Get size
-		videoWidth=netStream->getVideoWidth();
-		videoHeight=netStream->getVideoHeight();
-		valid=true;
-	}
-	if (videotag)
-	{
-		videoWidth=videotag->Width;
-		videoHeight=videotag->Height;
-		valid=embeddedVideoDecoder!= nullptr && embeddedVideoDecoder->getTexture().isValid();
-	}
-	if (valid)
-	{
-		//All operations here should be non blocking
-		ctxt.setProperties(this->getBlendMode());
-		MATRIX totalMatrix = getParent()->getConcatenatedMatrix();
-
-		float scalex;
-		float scaley;
-		int offx,offy;
-		getSystemState()->stageCoordinateMapping(getSystemState()->getRenderThread()->windowWidth,getSystemState()->getRenderThread()->windowHeight,offx,offy, scalex,scaley);
-		totalMatrix.scale(scalex, scaley);
-		//Enable YUV to RGB conversion
-		//width and height will not change now (the Video mutex is acquired)
-		ctxt.renderTextured(embeddedVideoDecoder ? embeddedVideoDecoder->getTexture() : netStream->getTexture(),
-			clippedAlpha(), RenderContext::YUV_MODE,
-			1.0f,1.0f,1.0f,1.0f,
-			0.0f,0.0f,0.0f,0.0f,
-			false,false,0.0,RGB(),SMOOTH_MODE::SMOOTH_NONE,totalMatrix);
-		if (!videotag)
-			netStream->unlock();
-		return false;
-	}
-	return true;
-}
-
-bool Video::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax)
-{
 	xmin=0;
 	xmax=width;
 	ymin=0;
@@ -345,10 +484,12 @@ ASFUNCTIONBODY_ATOM(Video,attachNetStream)
 {
 	Video* th=asAtomHandler::as<Video>(obj);
 	assert_and_throw(argslen==1);
+	th->resetDecoder();
 	if(asAtomHandler::isNull(args[0]) || asAtomHandler::isUndefined(args[0])) //Drop the connection
 	{
 		Locker l(th->mutex);
 		th->netStream=NullRef;
+		th->requestInvalidation(wrk->getSystemState());
 		return;
 	}
 
@@ -361,6 +502,7 @@ ASFUNCTIONBODY_ATOM(Video,attachNetStream)
 
 	Locker l(th->mutex);
 	th->netStream=_MR(asAtomHandler::as<NetStream>(args[0]));
+	th->requestInvalidation(wrk->getSystemState());
 }
 ASFUNCTIONBODY_ATOM(Video,clear)
 {
@@ -371,10 +513,11 @@ ASFUNCTIONBODY_ATOM(Video,clear)
 		th->netStream->clearFrameBuffer();
 }
 
-_NR<DisplayObject> Video::hitTestImpl(number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly)
+_NR<DisplayObject> Video::hitTestImpl(const Vector2f&, const Vector2f& localPoint, HIT_TYPE type,bool interactiveObjectsOnly)
 {
 	//TODO: support masks
-	if(x>=0 && x<=width && y>=0 && y<=height)
+	//TODO: Add a point intersect function to RECT, and use that instead.
+	if(localPoint.x>=0 && localPoint.x<=width && localPoint.y>=0 && localPoint.y<=height)
 	{
 		this->incRef();
 		return _MR(this);
@@ -406,11 +549,11 @@ Sound::~Sound()
 void Sound::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(c->getSystemState(),load),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(c->getSystemState(),play,0,Class<SoundChannel>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("extract","",Class<IFunction>::getFunction(c->getSystemState(),extract,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("loadCompressedDataFromByteArray","",Class<IFunction>::getFunction(c->getSystemState(),loadCompressedDataFromByteArray),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("load","",c->getSystemState()->getBuiltinFunction(load),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("play","",c->getSystemState()->getBuiltinFunction(play,0,Class<SoundChannel>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("extract","",c->getSystemState()->getBuiltinFunction(extract,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("loadCompressedDataFromByteArray","",c->getSystemState()->getBuiltinFunction(loadCompressedDataFromByteArray),NORMAL_METHOD,true);
 	REGISTER_GETTER_RESULTTYPE(c,bytesLoaded,UInteger);
 	REGISTER_GETTER_RESULTTYPE(c,bytesTotal,UInteger);
 	REGISTER_GETTER_RESULTTYPE(c,length,Number);
@@ -465,8 +608,6 @@ void Sound::prepareShutdown()
 
 bool Sound::countCylicMemberReferences(garbagecollectorstate& gcstate)
 {
-	if (gcstate.checkAncestors(this))
-		return false;
 	bool ret = EventDispatcher::countCylicMemberReferences(gcstate);
 	if (soundChannel)
 		ret = soundChannel->countAllCylicMemberReferences(gcstate) || ret;
@@ -539,13 +680,13 @@ ASFUNCTIONBODY_ATOM(Sound,play)
 	int32_t loops;
 	_NR<SoundTransform> soundtransform;
 	ARG_CHECK(ARG_UNPACK(startTime, 0)(loops,0)(soundtransform,NullRef));
-	if (!wrk->rootClip->usesActionScript3) // actionscript2 expects the starttime in seconds, actionscript3 in milliseconds
+	if (!wrk->rootClip->needsActionScript3()) // actionscript2 expects the starttime in seconds, actionscript3 in milliseconds
 		startTime *= 1000;
 	if (soundtransform.isNull())
 		soundtransform = _MR(Class<SoundTransform>::getInstanceSNoArgs(wrk));
 	if (th->container)
 	{
-		if (!wrk->rootClip->usesActionScript3)
+		if (!wrk->rootClip->needsActionScript3())
 		{
 			LOG(LOG_ERROR,"playing sound without attached tag, ignored");
 			return;
@@ -563,6 +704,8 @@ ASFUNCTIONBODY_ATOM(Sound,play)
 		if (th->soundChannel)
 		{
 			th->soundChannel->setLoops(loops);
+			if (th->is<AVM1Sound>())
+				th->soundChannel->setSampleProducer(th);
 			th->soundChannel->soundTransform = soundtransform;
 			th->soundChannel->play(startTime);
 			th->soundChannel->incRef();
@@ -572,6 +715,8 @@ ASFUNCTIONBODY_ATOM(Sound,play)
 		SoundChannel* s = Class<SoundChannel>::getInstanceS(wrk,::ceil(th->buffertime/1000.0),th->soundData, th->format);
 		s->setStartTime(startTime);
 		s->setLoops(loops);
+		if (th->is<AVM1Sound>())
+			th->soundChannel->setSampleProducer(th);
 		s->soundTransform = soundtransform;
 		s->play(startTime);
 		ret = asAtomHandler::fromObjectNoPrimitive(s);
@@ -591,7 +736,7 @@ ASFUNCTIONBODY_ATOM(Sound,extract)
 {
 	Sound* th=asAtomHandler::as<Sound>(obj);
 	_NR<ByteArray> target;
-	int32_t length;
+	number_t length;
 	int32_t startPosition;
 	ARG_CHECK(ARG_UNPACK(target)(length)(startPosition,-1));
 	int32_t readcount=0;
@@ -624,7 +769,7 @@ ASFUNCTIONBODY_ATOM(Sound,extract)
 			}
 			if(!th->rawDataStreamDecoder->isValid())
 			{
-				LOG(LOG_ERROR,"invalid streamDecoder");
+				LOG(LOG_ERROR,"invalid streamDecoder in Sound.extract:"<<th->format.codec<<" "<<th->format.channels<<"/"<<th->format.sampleRate<<" "<<th->soundData->getReceivedLength());
 				delete th->rawDataStreamDecoder;
 				th->rawDataStreamDecoder=nullptr;
 			}
@@ -677,7 +822,7 @@ ASFUNCTIONBODY_ATOM(Sound,extract)
 					for (int32_t i = 0; i < min(readcount,bytelength); i+=4)
 					{
 						uint32_t* u = (uint32_t*)(&data[i]);
-						*u = GUINT32_TO_BE(*u);
+						*u = GUINT32_TO_LE(*u);
 					}
 				}
 #else
@@ -686,7 +831,7 @@ ASFUNCTIONBODY_ATOM(Sound,extract)
 					for (int32_t i = 0; i < min(readcount,bytelength); i+=4)
 					{
 						uint32_t* u = (uint32_t*)(&data[i]);
-						*u = GUINT32_TO_LE(*u);
+						*u = GUINT32_TO_BE(*u);
 					}
 				}
 #endif
@@ -801,8 +946,8 @@ ASFUNCTIONBODY_GETTER(Sound,length)
 void SoundMixer::sinit(Class_base* c)
 {
 	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_FINAL | CLASS_SEALED);
-	c->setDeclaredMethodByQName("stopAll","",Class<IFunction>::getFunction(c->getSystemState(),stopAll),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("computeSpectrum","",Class<IFunction>::getFunction(c->getSystemState(),computeSpectrum),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("stopAll","",c->getSystemState()->getBuiltinFunction(stopAll),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("computeSpectrum","",c->getSystemState()->getBuiltinFunction(computeSpectrum),NORMAL_METHOD,false);
 	REGISTER_GETTER_SETTER_STATIC(c,bufferTime);
 	REGISTER_GETTER_SETTER_STATIC(c,soundTransform);
 }
@@ -849,7 +994,7 @@ SoundChannel::SoundChannel(ASWorker* wrk, Class_base* c, uint32_t _buffertimesec
 	leftPeak(1),rightPeak(1),semSampleData(0)
 {
 	subtype=SUBTYPE_SOUNDCHANNEL;
-	if (soundinfo && soundinfo->HasLoops)
+	if (soundinfo)
 		setLoops(soundinfo->LoopCount);
 	if (sampleproducer)
 	{
@@ -930,7 +1075,7 @@ void SoundChannel::play(number_t starttime)
 		}
 		mutex.unlock();
 		while (!ACQUIRE_READ(terminated))
-			compat_msleep(10);
+			getSystemState()->sleep_ms(10);
 		mutex.lock();
 		restartafterabort=false;
 		startTime = starttime;
@@ -967,8 +1112,8 @@ void SoundChannel::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->isReusable=true;
-	c->setDeclaredMethodByQName("stop","",Class<IFunction>::getFunction(c->getSystemState(),stop),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(c->getSystemState(),getPosition),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stop","",c->getSystemState()->getBuiltinFunction(stop),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("position","",c->getSystemState()->getBuiltinFunction(getPosition,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
 
 	REGISTER_GETTER_RESULTTYPE(c,leftPeak,Number);
 	REGISTER_GETTER_RESULTTYPE(c,rightPeak,Number);
@@ -1070,8 +1215,6 @@ void SoundChannel::prepareShutdown()
 
 bool SoundChannel::countCylicMemberReferences(garbagecollectorstate& gcstate)
 {
-	if (gcstate.checkAncestors(this))
-		return false;
 	bool ret = EventDispatcher::countCylicMemberReferences(gcstate);
 	if (sampleproducer)
 		ret = sampleproducer->countAllCylicMemberReferences(gcstate) || ret;
@@ -1098,7 +1241,7 @@ ASFUNCTIONBODY_ATOM(SoundChannel, stop)
 	RELEASE_WRITE(th->stopping,true);
 	th->threadAbort();
 	while (!ACQUIRE_READ(th->stopped) && !ACQUIRE_READ(th->terminated))
-		compat_msleep(10);
+		wrk->getSystemState()->sleep_ms(10);
 }
 ASFUNCTIONBODY_ATOM(SoundChannel,getPosition)
 {
@@ -1114,7 +1257,7 @@ void SoundChannel::execute()
 {
 	// ensure audio manager is initialized
 	getSystemState()->waitInitialized();
-	while (true)
+	for (loopstogo = (loopstogo < 1) ? 1 : loopstogo; loopstogo; --loopstogo)
 	{
 		mutex.lock();
 		if (audioStream)
@@ -1124,23 +1267,24 @@ void SoundChannel::execute()
 		}
 		mutex.unlock();
 		RELEASE_WRITE(finished,false);
-		if (sampleproducer)
+		if (sampleproducer && !sampleproducer->is<AVM1Sound>())
 			playStreamFromSamples();
 		else
 			playStream();
-		if (threadAborting)
+		if (threadAborting || ACQUIRE_READ(stopped))
 			break;
+	}
+	if (!loopstogo)
+	{
 		if (ACQUIRE_READ(finished))
 		{
-			incRef();
-			getVm(getSystemState())->addEvent(_MR(this),_MR(Class<Event>::getInstanceS(getInstanceWorker(),"soundComplete")));
+			EventDispatcher* ev = !sampleproducer || !sampleproducer->is<AVM1Sound>() ? (EventDispatcher*)this : (EventDispatcher*)sampleproducer;
+			if (ev != nullptr)
+			{
+				ev->incRef();
+				getVm(getSystemState())->addEvent(_MR(ev),_MR(Class<Event>::getInstanceS(getInstanceWorker(),"soundComplete")));
+			}
 		}
-		if (loopstogo)
-			loopstogo--;
-		else
-			break;
-		if (ACQUIRE_READ(stopped))
-			break;
 	}
 }
 
@@ -1162,11 +1306,11 @@ void SoundChannel::playStream()
 		streamDecoder=new FFMpegStreamDecoder(nullptr,this->getSystemState()->getEngineData(),s,buffertimeseconds,&format,stream->hasTerminated() && !forstreaming ? stream->getReceivedLength() : -1);
 		if(!streamDecoder->isValid())
 		{
-			LOG(LOG_ERROR,"invalid streamDecoder");
+			LOG(LOG_ERROR,"invalid streamDecoder:"<<format.codec<<" "<<format.channels<<"/"<<format.sampleRate<<" "<<stream->getReceivedLength());
 			threadAbort();
 			restartafterabort=false;
 		}
-		else
+		else if (this->startTime!=0)
 		{
 			streamDecoder->jumpToPosition(this->startTime);
 			if (audioStream)
@@ -1188,7 +1332,7 @@ void SoundChannel::playStream()
 				throw JobTerminationException();
 			}
 			if(audioStream==nullptr && audioDecoder && audioDecoder->isValid())
-				audioStream=getSystemState()->audioManager->createStream(audioDecoder,false,this,this->fromSoundTag ? this->fromSoundTag->getId() : -1,startTime,soundTransform ? soundTransform->volume : 1.0);
+				audioStream=getSystemState()->audioManager->createStream(audioDecoder,false,this,this->fromSoundTag ? this->fromSoundTag->getId() : -1,startTime,soundTransform ? number_t(soundTransform->volume)/100.0 : 1.0);
 
 			if(audioStream)
 			{
@@ -1203,16 +1347,22 @@ void SoundChannel::playStream()
 					mutex.unlock();
 					break;
 				}
-				//TODO: use soundTransform->pan
 				if(soundTransform && soundTransform->volume != oldVolume)
 				{
-					audioStream->setVolume(soundTransform->volume);
+					audioStream->setVolume(number_t(soundTransform->volume)/100.0);
 					oldVolume = soundTransform->volume;
 				}
 				checkEnvelope();
+				if (soundTransform)
+					audioStream->setPanning(soundTransform->leftToLeft, soundTransform->leftToRight, soundTransform->rightToRight, soundTransform->rightToLeft);
 			}
 			else if (audioDecoder && audioDecoder->isValid())
 			{
+				if (streamDecoder->atEnd())
+				{
+					audioDecoder->setFlushing();
+					RELEASE_WRITE(stopped,true);
+				}
 				// no audiostream available, consume data anyway
 				if (getSystemState()->getEngineData()->audio_useFloatSampleFormat())
 				{
@@ -1305,13 +1455,14 @@ void SoundChannel::playStreamFromSamples()
 				
 				if(audioStream)
 				{
-					//TODO: use soundTransform->pan
 					if(soundTransform && soundTransform->volume != oldVolume)
 					{
 						audioStream->setVolume(soundTransform->volume);
 						oldVolume = soundTransform->volume;
 					}
 					checkEnvelope();
+					if (soundTransform)
+						audioStream->setPanning(soundTransform->leftToLeft, soundTransform->leftToRight, soundTransform->rightToRight, soundTransform->rightToLeft);
 					if (streamdatafinished && !audioDecoder->hasDecodedFrames())
 						threadAbort();
 				}
@@ -1421,7 +1572,7 @@ void SoundChannel::threadAbort()
 }
 void SoundChannel::checkEnvelope()
 {
-	if (soundinfo && soundinfo->HasEnvelope)
+	if (soundinfo && !soundinfo->SoundEnvelope.empty())
 	{
 		uint32_t playedtime = audioStream ? audioStream->getPlayedTime() : 0;
 		auto itprev = soundinfo->SoundEnvelope.begin();
@@ -1433,10 +1584,8 @@ void SoundChannel::checkEnvelope()
 		}
 		if (itprev == soundinfo->SoundEnvelope.end())
 			return;
-		leftPeak= number_t(itprev->LeftLevel)/32768.0;
-		rightPeak= number_t(itprev->RightLevel)/32768.0;
-		if (audioStream)
-			audioStream->setPanning(itprev->LeftLevel,itprev->RightLevel);
+		leftPeak= number_t(itprev->LeftLevel)*100.0/32768.0;
+		rightPeak= number_t(itprev->RightLevel)*100.0/32768.0;
 		if (soundTransform.isNull())
 			soundTransform = _MR(Class<SoundTransform>::getInstanceSNoArgs(getInstanceWorker()));
 		soundTransform->leftToLeft=leftPeak;
@@ -1447,9 +1596,9 @@ void SoundChannel::checkEnvelope()
 void StageVideo::sinit(Class_base *c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructorNotInstantiatable, CLASS_SEALED);
-	c->setDeclaredMethodByQName("videoWidth","",Class<IFunction>::getFunction(c->getSystemState(),_getVideoWidth),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("videoHeight","",Class<IFunction>::getFunction(c->getSystemState(),_getVideoHeight),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("attachNetStream","",Class<IFunction>::getFunction(c->getSystemState(),attachNetStream),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("videoWidth","",c->getSystemState()->getBuiltinFunction(_getVideoWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("videoHeight","",c->getSystemState()->getBuiltinFunction(_getVideoHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("attachNetStream","",c->getSystemState()->getBuiltinFunction(attachNetStream),NORMAL_METHOD,true);
 }
 
 
@@ -1514,7 +1663,7 @@ void Microphone::sinit(Class_base* c)
 {
 	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
 	REGISTER_GETTER(c,isSupported);
-	c->setDeclaredMethodByQName("getMicrophone","",Class<IFunction>::getFunction(c->getSystemState(),getMicrophone),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("getMicrophone","",c->getSystemState()->getBuiltinFunction(getMicrophone),NORMAL_METHOD,false);
 
 }
 ASFUNCTIONBODY_GETTER_NOT_IMPLEMENTED(Microphone,isSupported)
@@ -1536,8 +1685,8 @@ ASFUNCTIONBODY_GETTER_NOT_IMPLEMENTED(Camera,isSupported)
 void VideoStreamSettings::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("setKeyFrameInterval","",Class<IFunction>::getFunction(c->getSystemState(),setKeyFrameInterval),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("setMode","",Class<IFunction>::getFunction(c->getSystemState(),setMode),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setKeyFrameInterval","",c->getSystemState()->getBuiltinFunction(setKeyFrameInterval),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setMode","",c->getSystemState()->getBuiltinFunction(setMode),NORMAL_METHOD,true);
 }
 ASFUNCTIONBODY_ATOM(VideoStreamSettings,_constructor)
 {
@@ -1555,7 +1704,7 @@ ASFUNCTIONBODY_ATOM(VideoStreamSettings,setMode)
 void H264VideoStreamSettings::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, VideoStreamSettings, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("setProfileLevel","",Class<IFunction>::getFunction(c->getSystemState(),setProfileLevel),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setProfileLevel","",c->getSystemState()->getBuiltinFunction(setProfileLevel),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c, codec);
 	REGISTER_GETTER(c, level);
 	REGISTER_GETTER(c, profile);

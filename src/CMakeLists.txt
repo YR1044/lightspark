@@ -32,11 +32,14 @@ SET(LIBSPARK_SOURCES
   timer.cpp
   tiny_string.cpp
   errorconstants.cpp
+  launcher.cpp
   backends/audio.cpp
   backends/builtindecoder.cpp
+  backends/cachedsurface.cpp
   backends/config.cpp
   backends/currency.cpp
   backends/decoder.cpp
+  backends/event_loop.cpp
   backends/extscriptobject.cpp
   backends/geometry.cpp
   backends/graphics.cpp
@@ -48,6 +51,7 @@ SET(LIBSPARK_SOURCES
   backends/rendering_context.cpp
   backends/rtmputils.cpp
   backends/security.cpp
+  backends/sdl/event_loop.cpp
   backends/streamcache.cpp
   backends/urlutils.cpp
   backends/xml_support.cpp
@@ -77,6 +81,7 @@ SET(LIBSPARK_SOURCES
   scripting/abc_flashmedia.cpp
   scripting/abc_flashnet.cpp
   scripting/abc_flashprinting.cpp
+  scripting/abc_flashprofiler.cpp
   scripting/abc_flashsampler.cpp
   scripting/abc_flashsecurity.cpp
   scripting/abc_flashsensors.cpp
@@ -105,6 +110,7 @@ SET(LIBSPARK_SOURCES
   scripting/flash/desktop/flashdesktop.cpp
   scripting/flash/display/BitmapContainer.cpp
   scripting/flash/display/BitmapData.cpp
+  scripting/flash/display/Bitmap.cpp
   scripting/flash/display/bitmapencodingcolorspace.cpp
   scripting/flash/display/colorcorrection.cpp
   scripting/flash/display/ColorCorrectionSupport.cpp
@@ -121,8 +127,17 @@ SET(LIBSPARK_SOURCES
   scripting/flash/display/GraphicsSolidFill.cpp
   scripting/flash/display/GraphicsStroke.cpp
   scripting/flash/display/GraphicsTrianglePath.cpp
+  scripting/flash/display/Loader.cpp
+  scripting/flash/display/LoaderInfo.cpp
+  scripting/flash/display/MorphShape.cpp
+  scripting/flash/display/MovieClip.cpp
   scripting/flash/display/NativeMenuItem.cpp
   scripting/flash/display/NativeWindow.cpp
+  scripting/flash/display/RootMovieClip.cpp
+  scripting/flash/display/Shape.cpp
+  scripting/flash/display/SimpleButton.cpp
+  scripting/flash/display/Stage.cpp
+  scripting/flash/display/Stage3D.cpp
   scripting/flash/display/jpegencoderoptions.cpp
   scripting/flash/display/jpegxrencoderoptions.cpp
   scripting/flash/display/pngencoderoptions.cpp
@@ -130,15 +145,29 @@ SET(LIBSPARK_SOURCES
   scripting/flash/display/shaderprecision.cpp
   scripting/flash/display/swfversion.cpp
   scripting/flash/display/triangleculling.cpp
+  scripting/flash/display/StageAspectRatio.cpp
   scripting/flash/display3d/flashdisplay3d.cpp
   scripting/flash/display3d/flashdisplay3dtextures.cpp
   scripting/flash/events/flashevents.cpp
   scripting/flash/external/ExternalInterface.cpp
   scripting/flash/external/ExtensionContext.cpp
   scripting/flash/filters/flashfilters.cpp
+  scripting/flash/filters/BevelFilter.cpp
+  scripting/flash/filters/BlurFilter.cpp
+  scripting/flash/filters/ColorMatrixFilter.cpp
+  scripting/flash/filters/ConvolutionFilter.cpp
+  scripting/flash/filters/DisplacementMapFilter.cpp
+  scripting/flash/filters/DropShadowFilter.cpp
+  scripting/flash/filters/GlowFilter.cpp
+  scripting/flash/filters/GradientBevelFilter.cpp
+  scripting/flash/filters/GradientGlowFilter.cpp
   scripting/flash/filesystem/flashfilesystem.cpp
   scripting/flash/geom/flashgeom.cpp
+  scripting/flash/geom/Matrix3D.cpp
   scripting/flash/geom/orientation3d.cpp
+  scripting/flash/geom/Point.cpp
+  scripting/flash/geom/Rectangle.cpp
+  scripting/flash/geom/Vector3D.cpp
   scripting/flash/globalization/datetimeformatter.cpp
   scripting/flash/globalization/datetimestyle.cpp
   scripting/flash/globalization/lastoperationstatus.cpp
@@ -166,6 +195,7 @@ SET(LIBSPARK_SOURCES
   scripting/flash/media/stagevideoavailabilityreason.cpp
   scripting/flash/media/videodecoder.cpp
   scripting/flash/net/flashnet.cpp
+  scripting/flash/net/LocalConnection.cpp
   scripting/flash/net/netgroupreceivemode.cpp
   scripting/flash/net/netgroupreplicationstrategy.cpp
   scripting/flash/net/netgroupsendmode.cpp
@@ -179,6 +209,7 @@ SET(LIBSPARK_SOURCES
   scripting/flash/net/NetStreamPlayTransitions.cpp
   scripting/flash/net/DatagramSocket.cpp
   scripting/flash/printing/flashprinting.cpp
+  scripting/flash/profiler/flashprofiler.cpp
   scripting/flash/errors/flasherrors.cpp
   scripting/flash/sampler/flashsampler.cpp
   scripting/flash/security/certificatestatus.cpp
@@ -213,21 +244,29 @@ SET(LIBSPARK_SOURCES
   scripting/flash/ui/gameinput.cpp
   scripting/flash/xml/flashxml.cpp
   scripting/toplevel/Array.cpp
+  scripting/toplevel/ASQName.cpp
   scripting/toplevel/ASString.cpp
   scripting/toplevel/Boolean.cpp
+  scripting/toplevel/Class_base.cpp
   scripting/toplevel/Date.cpp
   scripting/toplevel/Error.cpp
+  scripting/toplevel/Global.cpp
+  scripting/toplevel/IFunction.cpp
   scripting/toplevel/Integer.cpp
   scripting/toplevel/JSON.cpp
   scripting/toplevel/Math.cpp
+  scripting/toplevel/Namespace.cpp
+  scripting/toplevel/Null.cpp
   scripting/toplevel/Number.cpp
   scripting/toplevel/RegExp.cpp
   scripting/toplevel/UInteger.cpp
+  scripting/toplevel/Undefined.cpp
   scripting/toplevel/Vector.cpp
   scripting/toplevel/XML.cpp
   scripting/toplevel/XMLList.cpp
-  scripting/class.cpp
+  scripting/toplevel/AVM1Function.cpp
   scripting/toplevel/toplevel.cpp
+  scripting/class.cpp
   scripting/avmplus/avmplus.cpp
   scripting/avm1/avm1key.cpp
   scripting/avm1/avm1sound.cpp
@@ -237,6 +276,9 @@ SET(LIBSPARK_SOURCES
   scripting/avm1/avm1ui.cpp
   scripting/avm1/avm1xml.cpp
   scripting/avm1/avm1media.cpp
+  scripting/avm1/avm1array.cpp
+  scripting/avm1/avm1date.cpp
+  scripting/avm1/avm1filter.cpp
   scripting/avm1_interpreter.cpp
   platforms/engineutils.cpp
   3rdparty/nanovg/src/nanovg.c
@@ -287,9 +329,20 @@ SET(LIBSPARK_SOURCES
   3rdparty/avmplus/pcre/pcre_internal.h
   3rdparty/avmplus/pcre/pcreposix.h
   3rdparty/avmplus/pcre/pcre_scanner.h
+  3rdparty/imgui/imgui.cpp
+  3rdparty/imgui/imgui_draw.cpp
+  3rdparty/imgui/imgui_tables.cpp
+  3rdparty/imgui/imgui_widgets.cpp
+  3rdparty/imgui/backends/imgui_impl_sdl2.cpp
+  3rdparty/imgui/backends/imgui_impl_opengl2.cpp
+  3rdparty/tinyfiledialogs/tinyfiledialogs.c
   )
+SET(LIBNATIVEEXTENSION_SOURCES
+  nativeextension/FREimpl.cpp
+  )
+
 IF(MINGW)
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
+    SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
 ELSEIF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
 ELSE()
@@ -308,10 +361,6 @@ ELSE()
   ENDIF(ENABLE_SSE2)
 ENDIF(MINGW)
 
-INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src)
-INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/scripting)
-INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/jxrgluelib)
-INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/3rdparty/avmplus/pcre)
 # needed for jxr image decoder
 SET_SOURCE_FILES_PROPERTIES(${PROJECT_SOURCE_DIR}/src/scripting/flash/display3d/flashdisplay3dtextures.cpp PROPERTIES COMPILE_FLAGS "-D__ANSI__ -DDISABLE_PERF_MEASUREMENT -Wno-endif-labels -I${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/common/include/ -I${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/image/sys/")
 SET(CMAKE_C_FLAGS "-D__ANSI__ -DDISABLE_PERF_MEASUREMENT -Wno-endif-labels -I${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/common/include -I${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/image/sys -I${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/common/include")
@@ -324,24 +373,54 @@ IF(EMSCRIPTEN)
 ELSE()
 IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   ADD_LIBRARY(spark SHARED ${LIBSPARK_SOURCES})
+  #library for handling communication with native extensions, has to be named "libCore.so" on Linux
+  ADD_LIBRARY(nativeextension SHARED ${LIBNATIVEEXTENSION_SOURCES})
+  SET_TARGET_PROPERTIES(nativeextension PROPERTIES OUTPUT_NAME Core)
   IF(NOT WIN32)
     #win32's cmake doesn't like liblightspark and lightspark.exe having the same name
     SET_TARGET_PROPERTIES(spark PROPERTIES OUTPUT_NAME lightspark)
   ENDIF()
   IF(MINGW)
-    SET_TARGET_PROPERTIES(spark PROPERTIES LINK_FLAGS "-Wl,--export-all-symbols")
+    #library for handling communication with native extensions, has to be named "Adobe AIR.dll" on Windows
+    SET_TARGET_PROPERTIES(nativeextension PROPERTIES PREFIX "")
+    SET_TARGET_PROPERTIES(nativeextension PROPERTIES OUTPUT_NAME "Adobe AIR")
+    # force linking of "Adobe AIR.dll" dynamically
+    TARGET_LINK_LIBRARIES(spark "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Adobe AIR.dll")
   ELSE()
+  TARGET_LINK_LIBRARIES(spark nativeextension)
     SET_TARGET_PROPERTIES(spark PROPERTIES LINK_FLAGS "-Wl,--version-script=${PROJECT_SOURCE_DIR}/src/lightspark.expmap")
   ENDIF()
 ELSE(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   IF(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     ADD_LIBRARY(spark SHARED ${LIBSPARK_SOURCES})
     SET_TARGET_PROPERTIES(spark PROPERTIES OUTPUT_NAME lightspark)
+	#library for handling communication with native extensions, has to be named "libCore.so"
+	ADD_LIBRARY(nativeextension SHARED ${LIBNATIVEEXTENSION_SOURCES})
+	SET_TARGET_PROPERTIES(nativeextension PROPERTIES OUTPUT_NAME Core)
+	TARGET_LINK_LIBRARIES(spark nativeextension)
   ELSE (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     ADD_LIBRARY(spark STATIC ${LIBSPARK_SOURCES})
+	ADD_LIBRARY(nativeextension STATIC ${LIBNATIVEEXTENSION_SOURCES})
+	TARGET_LINK_LIBRARIES(spark nativeextension)
   ENDIF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 ENDIF (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 ENDIF(EMSCRIPTEN)
+
+TARGET_INCLUDE_DIRECTORIES(
+	spark
+	PUBLIC ${PROJECT_BINARY_DIR}
+	PUBLIC ${PROJECT_SOURCE_DIR}/src
+	PUBLIC ${PROJECT_SOURCE_DIR}/src/scripting
+	PRIVATE ${PROJECT_SOURCE_DIR}/src/3rdparty/jxrlib/jxrgluelib
+	PRIVATE ${PROJECT_SOURCE_DIR}/src/3rdparty/avmplus/pcre
+	PRIVATE ${PROJECT_SOURCE_DIR}/src/3rdparty/imgui
+	PRIVATE ${PROJECT_SOURCE_DIR}/src/3rdparty/imgui/backends
+)
+
+TARGET_INCLUDE_DIRECTORIES(
+	nativeextension
+	PRIVATE "$<TARGET_PROPERTY:spark,INTERFACE_INCLUDE_DIRECTORIES>"
+)
 
 SET(LIGHTSPARK_ALL_LIBRARIES ${CAIRO_LIBRARIES} ${ZLIB_LIBRARIES}
 	${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${LLVM_LDFLAGS}
@@ -371,20 +450,15 @@ ELSE()
 ENDIF(ENABLE_GLES2)
 
 PACK_LIBRARY(spark $<TARGET_FILE:spark>)
+PACK_LIBRARY(nativeextension $<TARGET_FILE:nativeextension>)
 #We have to use LIBRARY on linux and RUNTIME on win32
 INSTALL(TARGETS spark RUNTIME DESTINATION ${PRIVATELIBDIR} LIBRARY DESTINATION ${PRIVATELIBDIR} ARCHIVE DESTINATION ${PRIVATELIBDIR})
+INSTALL(TARGETS nativeextension RUNTIME DESTINATION ${PRIVATELIBDIR} LIBRARY DESTINATION ${PRIVATELIBDIR} ARCHIVE DESTINATION ${PRIVATELIBDIR})
 
 # lightspark executable target
 IF(COMPILE_LIGHTSPARK)
   ADD_EXECUTABLE(lightspark main.cpp)
-  IF(MINGW)
-    SET_TARGET_PROPERTIES(lightspark PROPERTIES LINK_FLAGS "-Wl,--whole-archive -lSDL2main -Wl,--no-whole-archive")
-  ENDIF()
   TARGET_LINK_LIBRARIES(lightspark spark)
-  #With STATICDEPS, all deps are compiled into spark
-  IF(NOT STATICDEPS)
-  TARGET_LINK_LIBRARIES(lightspark ${SDL2_LIBRARIES})
-  ENDIF()
 
   PACK_EXECUTABLE(lightspark $<TARGET_FILE:lightspark>)
   INSTALL(TARGETS lightspark RUNTIME DESTINATION ${BINDIR})
@@ -396,10 +470,7 @@ ENDIF(COMPILE_LIGHTSPARK)
 # tightspark executable target
 IF(COMPILE_TIGHTSPARK)
   ADD_EXECUTABLE(tightspark tightspark.cpp)
-  TARGET_LINK_LIBRARIES(tightspark spark)
-  IF(MINGW)
-    SET_TARGET_PROPERTIES(tightspark PROPERTIES LINK_FLAGS "-Wl,--whole-archive -lSDL2main -Wl,--no-whole-archive")
-  ENDIF()
+  TARGET_LINK_LIBRARIES(tightspark spark nativeextension)
   #With STATICDEPS, all deps are compiled into spark
   IF(NOT STATICDEPS)
     TARGET_LINK_LIBRARIES(tightspark ${GTHREAD_LIBRARIES})

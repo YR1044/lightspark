@@ -35,8 +35,8 @@ public:
 	ASFUNCTION_ATOM(_constructor);
 	ASPROPERTY_GETTER_SETTER(number_t, alpha);
 	ASPROPERTY_GETTER_SETTER(uint32_t, color);
-	FILLSTYLE toFillStyle();
-	void appendToTokens(std::vector<uint64_t>& tokens,Graphics* graphics);
+	FILLSTYLE toFillStyle() override;
+	void appendToTokens(tokensVector& tokens, Graphics* graphics) override;
 };
 
 }

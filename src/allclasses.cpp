@@ -17,10 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include "scripting/toplevel/ASQName.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Date.h"
+#include "scripting/toplevel/Global.h"
 #include "scripting/toplevel/JSON.h"
 #include "scripting/toplevel/Math.h"
+#include "scripting/toplevel/Namespace.h"
 #include "scripting/toplevel/RegExp.h"
 #include "scripting/toplevel/Vector.h"
 #include "scripting/toplevel/XML.h"
@@ -33,6 +36,7 @@
 #include "scripting/flash/desktop/clipboardtransfermode.h"
 #include "scripting/flash/desktop/flashdesktop.h"
 #include "scripting/flash/display/flashdisplay.h"
+#include "scripting/flash/display/Bitmap.h"
 #include "scripting/flash/display/BitmapData.h"
 #include "scripting/flash/display/bitmapencodingcolorspace.h"
 #include "scripting/flash/display/colorcorrection.h"
@@ -58,12 +62,29 @@
 #include "scripting/flash/display/shaderprecision.h"
 #include "scripting/flash/display/swfversion.h"
 #include "scripting/flash/display/triangleculling.h"
+#include "scripting/flash/display/Loader.h"
+#include "scripting/flash/display/LoaderInfo.h"
+#include "scripting/flash/display/MorphShape.h"
+#include "scripting/flash/display/MovieClip.h"
 #include "scripting/flash/display/NativeWindow.h"
+#include "scripting/flash/display/Shape.h"
+#include "scripting/flash/display/SimpleButton.h"
+#include "scripting/flash/display/StageAspectRatio.h"
+#include "scripting/flash/display/Stage.h"
 #include "scripting/flash/display3d/flashdisplay3d.h"
 #include "scripting/flash/display3d/flashdisplay3dtextures.h"
 #include "scripting/flash/events/flashevents.h"
 #include "scripting/flash/filesystem/flashfilesystem.h"
 #include "scripting/flash/filters/flashfilters.h"
+#include "scripting/flash/filters/BevelFilter.h"
+#include "scripting/flash/filters/BlurFilter.h"
+#include "scripting/flash/filters/ColorMatrixFilter.h"
+#include "scripting/flash/filters/ConvolutionFilter.h"
+#include "scripting/flash/filters/DisplacementMapFilter.h"
+#include "scripting/flash/filters/DropShadowFilter.h"
+#include "scripting/flash/filters/GlowFilter.h"
+#include "scripting/flash/filters/GradientBevelFilter.h"
+#include "scripting/flash/filters/GradientGlowFilter.h"
 #include "scripting/flash/net/flashnet.h"
 #include "scripting/flash/net/URLRequestHeader.h"
 #include "scripting/flash/net/URLStream.h" 
@@ -73,6 +94,7 @@
 #include "scripting/flash/net/netgroupreplicationstrategy.h"
 #include "scripting/flash/net/netgroupsendmode.h"
 #include "scripting/flash/net/netgroupsendresult.h"
+#include "scripting/flash/net/LocalConnection.h"
 #include "scripting/flash/net/NetStreamInfo.h"
 #include "scripting/flash/net/NetStreamPlayOptions.h"
 #include "scripting/flash/net/NetStreamPlayTransitions.h"
@@ -99,7 +121,11 @@
 #include "scripting/flash/utils/IntervalManager.h"
 #include "scripting/flash/utils/IntervalRunner.h"
 #include "scripting/flash/geom/flashgeom.h"
+#include "scripting/flash/geom/Matrix3D.h"
 #include "scripting/flash/geom/orientation3d.h"
+#include "scripting/flash/geom/Point.h"
+#include "scripting/flash/geom/Rectangle.h"
+#include "scripting/flash/geom/Vector3D.h"
 #include "scripting/flash/globalization/datetimeformatter.h"
 #include "scripting/flash/globalization/datetimestyle.h"
 #include "scripting/flash/globalization/collator.h"
@@ -150,6 +176,9 @@
 #include "scripting/avm1/avm1text.h"
 #include "scripting/avm1/avm1ui.h"
 #include "scripting/avm1/avm1xml.h"
+#include "scripting/avm1/avm1array.h"
+#include "scripting/avm1/avm1date.h"
+#include "scripting/avm1/avm1filter.h"
 
 using namespace lightspark;
 
@@ -166,6 +195,9 @@ using namespace lightspark;
 #define REGISTER_CLASS_NAME2(TYPE,NAME,NS) \
 	CLASS_##TYPE,
 
+#define REGISTER_CLASS_NAME_AVM1(TYPE,NAME,NS) \
+	CLASS_##TYPE,
+
 enum ASClassIds
 {
 //Leave a space for the special Class class
@@ -176,17 +208,27 @@ CLASS_LAST
 
 #undef REGISTER_CLASS_NAME
 #undef REGISTER_CLASS_NAME2
+#undef REGISTER_CLASS_NAME_AVM1
+
 
 //Phase 2: use the enumeratio to assign unique ids
 #define REGISTER_CLASS_NAME(TYPE, NS) \
 	template<> const char* ClassName<TYPE>::name = #TYPE; \
 	template<> const char* ClassName<TYPE>::ns = NS; \
-	template<> unsigned ClassName<TYPE>::id = CLASS_##TYPE;
+	template<> unsigned ClassName<TYPE>::id = CLASS_##TYPE; \
+	template<> bool ClassName<TYPE>::isAVM1 = false;
 
 #define REGISTER_CLASS_NAME2(TYPE,NAME,NS) \
 	template<> const char* ClassName<TYPE>::name = NAME; \
 	template<> const char* ClassName<TYPE>::ns = NS; \
-	template<> unsigned int ClassName<TYPE>::id = CLASS_##TYPE;
+	template<> unsigned int ClassName<TYPE>::id = CLASS_##TYPE; \
+	template<> bool ClassName<TYPE>::isAVM1 = false;
+
+#define REGISTER_CLASS_NAME_AVM1(TYPE,NAME,NS) \
+	template<> const char* ClassName<TYPE>::name = NAME; \
+	template<> const char* ClassName<TYPE>::ns = NS; \
+	template<> unsigned int ClassName<TYPE>::id = CLASS_##TYPE; \
+	template<> bool ClassName<TYPE>::isAVM1 = true;
 
 #include "allclasses.h"
 

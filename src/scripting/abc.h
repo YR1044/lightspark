@@ -20,6 +20,7 @@
 #ifndef SCRIPTING_ABC_H
 #define SCRIPTING_ABC_H 1
 
+#include "forwards/scripting/abc.h"
 #include "compat.h"
 #include <cstddef>
 #include "logger.h"
@@ -28,6 +29,7 @@
 #include <map>
 #include <set>
 #include "swf.h"
+#include "threading.h"
 #include "scripting/abcutils.h"
 #include "scripting/abctypes.h"
 
@@ -71,6 +73,8 @@ inline stack_entry make_stack_entry(llvm::Value* v, STACK_TYPE t)
 #endif
 
 bool isVmThread();
+
+class Responder;
 
 class method_info
 {
@@ -122,8 +126,8 @@ public:
 	multiname* paramTypeName(uint32_t i) const;
 	multiname* returnTypeName() const;
 
-	std::vector<const Type*> paramTypes;
-	const Type* returnType;
+	std::vector<Type*> paramTypes;
+	Type* returnType;
 	
 	bool hasExplicitTypes;
 	// indicates if the function code starts with getlocal_0/pushscope
@@ -189,6 +193,7 @@ enum OPERANDTYPES {
 
 #define ABC_OP_FORCEINT 0x1000 // forces the result of the arithmetic operation to be coerced to int
 #define ABC_OP_CACHED 0x2000
+#define ABC_OP_FROMGLOBAL 0x4000 // indicates that the cached object pointer points to a variable, not an ASObject
 #define ABC_OP_NOTCACHEABLE 0x4000
 #define ABC_OP_COERCED 0x8000 //indicates that the method call doesn't have to coerce the arguments to the expected type
 #define ABC_OP_BITMASK_USED 0xf000 // indicates all bits that are occupied by the flags
@@ -207,7 +212,8 @@ friend class method_info;
 private:
 	bool scriptsdeclared;
 public:
-	RootMovieClip* root;
+	ApplicationDomain* applicationDomain;
+	SecurityDomain* securityDomain;
 
 	method_info* get_method(unsigned int m);
 	uint32_t getString(unsigned int s) const;
@@ -294,7 +300,7 @@ public:
 	multiname* getMultiname(unsigned int m, call_context* th);
 	multiname* getMultinameImpl(asAtom& rt1, ASObject* rt2, unsigned int m, bool isrefcounted = true);
 	void buildInstanceTraits(ASObject* obj, int class_index);
-	ABCContext(RootMovieClip* r, std::istream& in, ABCVm* vm) DLL_PUBLIC;
+	ABCContext(ApplicationDomain* appDomain,SecurityDomain* secDomain, std::istream& in, ABCVm* vm) DLL_PUBLIC;
 	~ABCContext();
 	void declareScripts();
 	void exec(bool lazy);
@@ -341,6 +347,7 @@ private:
 	void registerClassesFlashGlobalization(Global* builtin);
 	void registerClassesFlashNet(Global* builtin);
 	void registerClassesFlashPrinting(Global* builtin);
+	void registerClassesFlashProfiler(Global* builtin);
 	void registerClassesFlashSampler(Global* builtin);
 	void registerClassesFlashSecurity(Global* builtin);
 	void registerClassesFlashSensors(Global* builtin);
@@ -353,6 +360,9 @@ private:
 	void registerClasses();
 
 	void registerFunctions();
+	
+	static asAtom constructGenericType_intern(ABCContext* context, ASObject* obj, int m, ASObject** args);
+	
 	//Interpreted AS instructions
 	//If you change a definition here, update the opcode_table_* entry in abc_codesynth
 	static ASObject *hasNext(ASObject* obj, ASObject* cur_index); 
@@ -513,13 +523,11 @@ private:
 	//Internal utilities
 	static void method_reset(method_info* th);
 
-	static void SetAllClassLinks();
-	static void AddClassLinks(Class_base* target);
-	static bool newClassRecursiveLink(Class_base* target, Class_base* c);
 	static void constructFunction(asAtom & ret, call_context* th, asAtom& f, asAtom* args, int argslen);
 	void parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _NR<Responder> responder);
 	
 	static void constructpropnoargs_intern(call_context* context, asAtom& ret, asAtom& obj, multiname* name, ASObject *constructor);
+	static void constructpropMultiArgs_intern(call_context* context,asAtom& ret,asAtom& obj);
 	static void construct_noargs_intern(call_context* context, asAtom& ret, asAtom& obj);
 
 #ifdef LLVM_ENABLED
@@ -545,17 +553,17 @@ private:
 	typedef std::pair<_NR<EventDispatcher>,_R<Event>> eventType;
 	std::deque<eventType, reporter_allocator<eventType>> events_queue;
 	std::list<eventType, reporter_allocator<eventType>> idleevents_queue;
+	std::list<eventType, reporter_allocator<eventType>> event_buffer;
+	template<typename F, typename F2>
+	void tryHandleEvent(F&& beforeCB, F2&& afterCB, eventType&& e);
 	void handleEvent(std::pair<_NR<EventDispatcher>,_R<Event> > e);
 	void handleFrontEvent();
 	void signalEventWaiters();
 	void buildClassAndInjectBase(const std::string& s, _R<RootMovieClip> base);
-	Class_inherit* findClassInherit(const std::string& s, RootMovieClip* r);
+	Class_inherit* findClassInherit(const std::string& s, ApplicationDomain* appDomain);
 
 	//Profiling support
 	static uint64_t profilingCheckpoint(uint64_t& startTime);
-
-	static bool checkPropertyException(ASObject *obj, multiname *name, asAtom &prop);
-	static bool checkPropertyExceptionInteger(ASObject *obj, int index, asAtom &prop);
 
 	// The base to assign to the next loaded context
 	ATOMIC_INT32(nextNamespaceBase);
@@ -647,11 +655,27 @@ private:
 	static void abc_pushwith(call_context* context);
 	static void abc_popscope(call_context* context);
 	static void abc_nextname(call_context* context);
+	static void abc_nextname_constant_constant(call_context* context);
+	static void abc_nextname_local_constant(call_context* context);
+	static void abc_nextname_constant_local(call_context* context);
+	static void abc_nextname_local_local(call_context* context);
+	static void abc_nextname_constant_constant_localresult(call_context* context);
+	static void abc_nextname_local_constant_localresult(call_context* context);
+	static void abc_nextname_constant_local_localresult(call_context* context);
+	static void abc_nextname_local_local_localresult(call_context* context);
 	static void abc_hasnext(call_context* context);
 
 	static void abc_pushnull(call_context* context);// 0x20
 	static void abc_pushundefined(call_context* context);
 	static void abc_nextvalue(call_context* context);
+	static void abc_nextvalue_constant_constant(call_context* context);
+	static void abc_nextvalue_local_constant(call_context* context);
+	static void abc_nextvalue_constant_local(call_context* context);
+	static void abc_nextvalue_local_local(call_context* context);
+	static void abc_nextvalue_constant_constant_localresult(call_context* context);
+	static void abc_nextvalue_local_constant_localresult(call_context* context);
+	static void abc_nextvalue_constant_local_localresult(call_context* context);
+	static void abc_nextvalue_local_local_localresult(call_context* context);
 	static void abc_pushbyte(call_context* context);
 	static void abc_pushshort(call_context* context);
 	static void abc_pushtrue(call_context* context);
@@ -677,6 +701,8 @@ private:
 	static void abc_pushScope_local(call_context* context);// 0x30
 	static void abc_pushnamespace(call_context* context);
 	static void abc_hasnext2(call_context* context);
+	static void	abc_hasnext2_localresult(call_context* context);
+	static void	abc_hasnext2_iftrue(call_context* context);
 	static void abc_li8(call_context* context);
 	static void abc_li8_constant(call_context* context);
 	static void abc_li8_local(call_context* context);
@@ -790,6 +816,10 @@ private:
 	static void abc_constructsuper_constant(call_context* context);
 	static void abc_constructsuper_local(call_context* context);
 	static void abc_constructprop(call_context* context);
+	static void abc_constructpropMultiArgs_constant(call_context* context);
+	static void abc_constructpropMultiArgs_local(call_context* context);
+	static void abc_constructpropMultiArgs_constant_localresult(call_context* context);
+	static void abc_constructpropMultiArgs_local_localresult(call_context* context);
 	static void abc_constructpropStaticName_constant(call_context* context);
 	static void abc_constructpropStaticName_local(call_context* context);
 	static void abc_constructpropStaticName_constant_localresult(call_context* context);
@@ -826,6 +856,7 @@ private:
 	static void abc_sxi16_local_localresult(call_context* context);
 	static void abc_constructgenerictype(call_context* context);
 	static void abc_newobject(call_context* context);
+	static void abc_newobject_noargs_localresult(call_context* context);
 	static void abc_newarray(call_context* context);
 	static void abc_newactivation(call_context* context);
 	static void abc_newclass(call_context* context);
@@ -900,6 +931,8 @@ private:
 	static void abc_getslot_local_localresult(call_context* context);
 	static void abc_getslot_constant_setslotnocoerce(call_context* context);
 	static void abc_getslot_local_setslotnocoerce(call_context* context);
+	static void abc_getSlotFromScopeObject(call_context* context);
+	static void abc_getSlotFromScopeObject_localresult(call_context* context);
 
 	static void abc_setslot(call_context* context);
 	static void abc_setslot_constant_constant(call_context* context);
@@ -1352,6 +1385,7 @@ public:
 #endif
 	llvm::LLVMContext& llvm_context();
 #endif
+	bool halted;
 
 	ABCVm(SystemState* s, MemoryAccount* m) DLL_PUBLIC;
 	/**
@@ -1366,6 +1400,8 @@ public:
 	void start() DLL_PUBLIC;
 	void finalize();
 	void registerClassesAVM1();
+	void initVM(std::string* errStr = nullptr);
+	void shutdownVM();
 	static int Run(void* d);
 	static void executeFunction(call_context* context);
 	static void dumpOpcodeCounters(uint32_t threshhold);
@@ -1387,21 +1423,25 @@ public:
 			const std::vector<InferenceData>& scopeStack, const multiname* name);
 	static EARLY_BIND_STATUS earlyBindForScopeStack(std::ostream& out, const SyntheticFunction* f,
 			const std::vector<InferenceData>& scopeStack, const multiname* name, InferenceData& inferredData);
-	static const Type* getLocalType(const SyntheticFunction* f, unsigned localIndex);
+	static Type* getLocalType(const SyntheticFunction* f, unsigned localIndex);
 
 	bool addEvent(_NR<EventDispatcher>,_R<Event>, bool isGlobalMessage=false) DLL_PUBLIC;
 	bool prependEvent(_NR<EventDispatcher>, _R<Event> , bool force=false) DLL_PUBLIC;
 	bool addIdleEvent(_NR<EventDispatcher>, _R<Event> , bool removeprevious=false) DLL_PUBLIC;
+	bool addBufferEvent(_NR<EventDispatcher>, _R<Event>) DLL_PUBLIC;
+	bool prependBufferEvent(_NR<EventDispatcher>, _R<Event>) DLL_PUBLIC;
 	int getEventQueueSize();
+	void handleQueuedEvents() DLL_PUBLIC;
 	void shutdown();
 	bool hasEverStarted() const { return status!=CREATED; }
+	bool hasTerminated() const { return status == TERMINATED; }
 	void addDeletableObject(ASObject *obj);
 
 	static Global* getGlobalScope(call_context* th);
 	static bool strictEqualImpl(ASObject*, ASObject*);
 	static void publicHandleEvent(EventDispatcher* dispatcher, _R<Event> event);
-	static _R<ApplicationDomain> getCurrentApplicationDomain(call_context* th);
-	static _R<SecurityDomain> getCurrentSecurityDomain(call_context* th);
+	static ApplicationDomain* getCurrentApplicationDomain(call_context* th);
+	static SecurityDomain* getCurrentSecurityDomain(call_context* th);
 
 	uint32_t getAndIncreaseNamespaceBase(uint32_t nsNum);
 

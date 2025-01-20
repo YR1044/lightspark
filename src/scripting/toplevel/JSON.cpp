@@ -19,6 +19,7 @@
 
 #include "scripting/argconv.h"
 #include "scripting/toplevel/JSON.h"
+#include "scripting/toplevel/Array.h"
 #include "scripting/toplevel/Integer.h"
 
 using namespace std;
@@ -32,8 +33,8 @@ JSON::JSON(ASWorker* wrk,Class_base* c):ASObject(wrk,c)
 void JSON::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
-	c->setDeclaredMethodByQName("parse","",Class<IFunction>::getFunction(c->getSystemState(),_parse,2),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("stringify","",Class<IFunction>::getFunction(c->getSystemState(),_stringify,3),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("parse","",c->getSystemState()->getBuiltinFunction(_parse,2,Class<ASObject>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("stringify","",c->getSystemState()->getBuiltinFunction(_stringify,3,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
 }
 void JSON::buildTraits(ASObject* o)
 {
@@ -238,7 +239,7 @@ bool JSON::parse(const tiny_string &jsonstring, CharIterator& it, asAtom& parent
 		
 		if (haskey)
 		{
-			params[0] = asAtomHandler::fromObject(abstract_s(wrk,key.normalizedName(wrk->getSystemState())));
+			params[0] = asAtomHandler::fromObject(abstract_s(wrk,key.normalizedName(wrk)));
 			if (asAtomHandler::isObject(parent) && asAtomHandler::getObjectNoCheck(parent)->hasPropertyByMultiname(key,true,false,wrk))
 			{
 				asAtomHandler::getObjectNoCheck(parent)->getVariableByMultiname(params[1],key,GET_VARIABLE_OPTION::NONE,wrk);
@@ -254,7 +255,7 @@ bool JSON::parse(const tiny_string &jsonstring, CharIterator& it, asAtom& parent
 		}
 
 		asAtom funcret=asAtomHandler::invalidAtom;
-		asAtom closure = asAtomHandler::getClosure(reviver) ? asAtomHandler::fromObject(asAtomHandler::getClosure(reviver)) : asAtomHandler::nullAtom;
+		asAtom closure = asAtomHandler::getClosureAtom(reviver, asAtomHandler::nullAtom);
 		ASATOM_INCREF(closure);
 		asAtomHandler::callFunction(reviver,wrk,funcret,closure, params, 2,true);
 		if(asAtomHandler::isValid(funcret))
@@ -532,7 +533,7 @@ bool JSON::parseNumber(const tiny_string &jsonstring, CharIterator& it, asAtom& 
 bool JSON::parseObject(const tiny_string &jsonstring, CharIterator& it, asAtom& parent, multiname &key, asAtom reviver, ASWorker* wrk)
 {
 	it++; // ignore '{' or ','
-	ASObject* subobj = Class<ASObject>::getInstanceS(wrk);
+	ASObject* subobj = new_asobject(wrk);
 	if (asAtomHandler::isInvalid(parent))
 		parent = asAtomHandler::fromObject(subobj);
 	else if (asAtomHandler::isObject(parent))

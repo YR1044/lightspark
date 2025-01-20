@@ -128,7 +128,10 @@ _CRTIMP char* __cdecl __MINGW_NOTHROW   _strdup (const char*) __MINGW_ATTRIB_MAL
  * And the liblightspark.dll is linked directly (without need for dllexport)
  */
 #ifndef DLL_PUBLIC
-#if __GNUC__ >= 4
+#ifdef _WIN32
+#	define DLL_PUBLIC __declspec(dllexport)
+#	define DLL_LOCAL
+#elif __GNUC__ >= 4
 #	define DLL_PUBLIC __attribute__ ((visibility("default")))
 #	define DLL_LOCAL  __attribute__ ((visibility("hidden")))
 #else
@@ -153,10 +156,40 @@ inline T maxTmpl(T a, T b)
 #define dmin minTmpl<double>
 #define dmax maxTmpl<double>
 
+/* clamp */
+template<class T>
+inline T clampTmpl(T a, T b, T c)
+{
+	return maxTmpl(b, minTmpl(c, a));
+}
+#define iclamp clampTmpl<int>
+#define dclamp clampTmpl<double>
+
+/* gcd */
+template<class T>
+inline T gcdTmpl(T a, T b)
+{
+	return !b ? a : gcdTmpl(b, a % b);
+}
+#define igcd gcdTmpl<int>
+#define dgcd gcdTmpl<double>
+
 /* timing */
 
-uint64_t compat_msectiming();
-void compat_msleep(unsigned int time);
+namespace lightspark
+{
+	class TimeSpec;
+};
+
+uint64_t compat_perfcount();
+uint64_t compat_perffreq();
+DLL_PUBLIC uint64_t compat_msectiming();
+DLL_PUBLIC uint64_t compat_usectiming();
+DLL_PUBLIC uint64_t compat_nsectiming();
+DLL_PUBLIC lightspark::TimeSpec compat_now();
+DLL_PUBLIC void compat_msleep(unsigned int time);
+DLL_PUBLIC void compat_usleep(uint64_t us);
+DLL_PUBLIC void compat_nsleep(uint64_t ns);
 uint64_t compat_get_thread_cputime_us();
 
 /* byte order */

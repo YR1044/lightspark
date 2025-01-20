@@ -20,11 +20,13 @@
 #ifndef SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H
 #define SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H 1
 
-#include "compat.h"
 #include "asobject.h"
+#include "compat.h"
+#include "events.h"
 #include "threading.h"
+#include "tiny_string.h"
+#include "scripting/flash/ui/keycodes.h"
 #include <string>
-#include <SDL2/SDL_keycode.h>
 #undef MOUSE_EVENT
 
 namespace lightspark
@@ -32,7 +34,8 @@ namespace lightspark
 
 enum EVENT_TYPE { EVENT=0, BIND_CLASS, SHUTDOWN, SYNC, MOUSE_EVENT,
 	FUNCTION,FUNCTION_ASYNC, EXTERNAL_CALL, CONTEXT_INIT, INIT_FRAME,
-	FLUSH_INVALIDATION_QUEUE, ADVANCE_FRAME, PARSE_RPC_MESSAGE,EXECUTE_FRAMESCRIPT,TEXTINPUT_EVENT,IDLE_EVENT,AVM1INITACTION_EVENT,ROOTCONSTRUCTEDEVENT };
+	FLUSH_INVALIDATION_QUEUE, FLUSH_EVENT_BUFFER, ADVANCE_FRAME, PARSE_RPC_MESSAGE,EXECUTE_FRAMESCRIPT,TEXTINPUT_EVENT,IDLE_EVENT,
+	AVM1INITACTION_EVENT,SET_LOADER_CONTENT_EVENT,ROOTCONSTRUCTEDEVENT, LOCALCONNECTIONEVENT,GETMOUSETARGET_EVENT, RENDER_FRAME };
 
 class ABCContext;
 class DictionaryTag;
@@ -43,6 +46,8 @@ class Responder;
 class GameInputDevice;
 class DefineSpriteTag;
 class ByteArray;
+class Rectangle;
+class Loader;
 
 class Event: public ASObject
 {
@@ -50,12 +55,12 @@ public:
 	Event(ASWorker* wrk, Class_base* cb, const tiny_string& t = "Event", bool b=false, bool c=false, CLASS_SUBTYPE st=SUBTYPE_EVENT);
 	void finalize() override;
 	static void sinit(Class_base*);
-	static void buildTraits(ASObject* o);
 	virtual void setTarget(asAtom t) {target = t; }
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(_preventDefault);
 	ASFUNCTION_ATOM(_isDefaultPrevented);
 	ASFUNCTION_ATOM(formatToString);
+	ASFUNCTION_ATOM(_toString);
 	ASFUNCTION_ATOM(clone);
 	virtual EVENT_TYPE getEventType() const {return EVENT;}
 	ASPROPERTY_GETTER(bool,bubbles);
@@ -110,14 +115,13 @@ class KeyboardEvent: public Event
 private:
 	Event* cloneImpl() const override ;
 
-	uint32_t modifiers;
-	uint32_t sdlScanCode;
-	ASPROPERTY_GETTER_SETTER(uint32_t, charCode);
-	ASPROPERTY_GETTER_SETTER(uint32_t, keyCode);
+	LSModifier modifiers;
+	ASPROPERTY_GETTER_SETTER(AS3KeyCode, charCode);
+	ASPROPERTY_GETTER_SETTER(AS3KeyCode, keyCode);
 	ASPROPERTY_GETTER_SETTER(uint32_t, keyLocation);
-	SDL_Keycode sdlkeycode;
 public:
-	KeyboardEvent(ASWorker* wrk, Class_base* c, tiny_string _type="", uint32_t _sdlcharcode=0, uint32_t _charcode=0, uint32_t _keycode=0, SDL_Keymod modifiers=KMOD_NONE, SDL_Keycode _sdlkeycode=SDLK_UNKNOWN);
+
+	KeyboardEvent(ASWorker* wrk, Class_base* c, tiny_string _type="", const AS3KeyCode& _charCode = AS3KEYCODE_UNKNOWN, const AS3KeyCode& _keyCode = AS3KEYCODE_UNKNOWN, const LSModifier& _modifiers = LSModifier::None);
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_GETTER_SETTER(altKey);
@@ -125,10 +129,10 @@ public:
 	ASFUNCTION_GETTER_SETTER(controlKey);
 	ASFUNCTION_GETTER_SETTER(ctrlKey);
 	ASFUNCTION_GETTER_SETTER(shiftKey);
-	uint32_t getSDLScanCode() const { return sdlScanCode; }
-	uint32_t getKeyCode() const { return keyCode; }
-	uint32_t getModifiers() const { return modifiers; }
-	SDL_Keycode getSDLKeyCode() const { return sdlkeycode; }
+	ASFUNCTION_ATOM(updateAfterEvent);
+	AS3KeyCode getCharCode() const { return charCode; }
+	AS3KeyCode getKeyCode() const { return keyCode; }
+	LSModifier getModifiers() const { return modifiers; }
 };
 
 class FocusEvent: public Event
@@ -233,6 +237,7 @@ public:
 	ProgressEvent(ASWorker* wrk, Class_base* c, uint32_t loaded, uint32_t total, const tiny_string& t="progress");
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
+	ASFUNCTION_ATOM(_toString);
 };
 
 class TimerEvent: public Event
@@ -247,12 +252,12 @@ public:
 class MouseEvent: public Event
 {
 private:
-	uint32_t modifiers; 
+	LSModifier modifiers;
 	Event* cloneImpl() const override;
 public:
 	MouseEvent(ASWorker* wrk, Class_base* c);
 	MouseEvent(ASWorker* wrk, Class_base* c, const tiny_string& t, number_t lx, number_t ly,
-		   bool b=true, SDL_Keymod _modifiers=KMOD_NONE,bool _buttonDown = false,
+		   bool b=true, const LSModifier& _modifiers = LSModifier::None, bool _buttonDown = false,
 		   _NR<InteractiveObject> relObj = NullRef, int32_t delta=1);
 	static void sinit(Class_base*);
 	void setTarget(asAtom t) override;
@@ -280,6 +285,20 @@ public:
 	
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
+};
+
+class NativeWindowBoundsEvent: public Event
+{
+public:
+	NativeWindowBoundsEvent(ASWorker* wrk, Class_base* c);
+	NativeWindowBoundsEvent(ASWorker* wrk, Class_base* c, const tiny_string& t, NullableRef<Rectangle> _beforeBounds, NullableRef<Rectangle> _afterBounds);
+	
+	static void sinit(Class_base*);
+	ASFUNCTION_ATOM(_constructor);
+	ASFUNCTION_ATOM(_toString);
+	ASPROPERTY_GETTER(_NR<Rectangle>,afterBounds);
+	ASPROPERTY_GETTER(_NR<Rectangle>,beforeBounds);
+	Event* cloneImpl() const override;
 };
 
 class InvokeEvent: public Event
@@ -356,9 +375,16 @@ public:
 
 class StatusEvent: public Event
 {
+private:
+	Event* cloneImpl() const override;
 public:
-	StatusEvent(ASWorker* wrk, Class_base* c) : Event(wrk,c, "StatusEvent") {}
+	StatusEvent(ASWorker* wrk, Class_base* c, const tiny_string& _code="", const tiny_string& _level=""):Event(wrk,c, "status"),
+		code(_code),level(_level)
+	{
+	}
 	static void sinit(Class_base*);
+	ASPROPERTY_GETTER_SETTER(tiny_string, code);
+	ASPROPERTY_GETTER_SETTER(tiny_string, level);
 };
 
 class DataEvent: public TextEvent
@@ -480,7 +506,7 @@ friend class ABCVm;
 private:
 	_NR<DisplayObject> clip;
 public:
-	InitFrameEvent(_NR<DisplayObject> m) : Event(nullptr,nullptr, "InitFrameEvent"),clip(m) {}
+	InitFrameEvent(_NR<DisplayObject> m);
 	EVENT_TYPE getEventType() const override { return INIT_FRAME; }
 };
 
@@ -490,9 +516,17 @@ friend class ABCVm;
 private:
 	_NR<DisplayObject> clip;
 public:
-	ExecuteFrameScriptEvent(_NR<DisplayObject> m):Event(nullptr,nullptr, "ExecuteFrameScriptEvent"),clip(m) {}
+	ExecuteFrameScriptEvent(_NR<DisplayObject> m);
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const override { return EXECUTE_FRAMESCRIPT; }
+};
+
+class RenderFrameEvent: public Event
+{
+public:
+	RenderFrameEvent():Event(nullptr,nullptr, "RenderFrameEvent") {}
+	static void sinit(Class_base*) {}
+	EVENT_TYPE getEventType() const override { return RENDER_FRAME; }
 };
 
 class AdvanceFrameEvent: public Event
@@ -501,17 +535,42 @@ friend class ABCVm;
 private:
 	_NR<DisplayObject> clip;
 public:
-	AdvanceFrameEvent(_NR<DisplayObject> m=NullRef): Event(nullptr,nullptr,"AdvanceFrameEvent"),clip(m) {}
+	AdvanceFrameEvent(_NR<DisplayObject> m=NullRef);
 	EVENT_TYPE getEventType() const override { return ADVANCE_FRAME; }
+};
+class SetLoaderContentEvent: public Event
+{
+friend class ABCVm;
+private:
+	_NR<DisplayObject> content;
+	_NR<Loader> loader;
+public:
+	SetLoaderContentEvent(_NR<DisplayObject> m, _NR<Loader> _loader);
+	//SetLoaderContentEvent(_NR<MovieClip> m, _NR<Loader> _loader);
+	EVENT_TYPE getEventType() const override { return SET_LOADER_CONTENT_EVENT; }
 };
 class RootConstructedEvent: public Event
 {
 friend class ABCVm;
 private:
 	_NR<DisplayObject> clip;
+	bool _explicit;
 public:
-	RootConstructedEvent(_NR<DisplayObject> m): Event(nullptr,nullptr,"RootConstructedEvent"),clip(m) {}
+	RootConstructedEvent(_NR<DisplayObject> m, bool explicit_ = false);
 	EVENT_TYPE getEventType() const override { return ROOTCONSTRUCTEDEVENT; }
+};
+class LocalConnectionEvent: public Event
+{
+friend class SystemState;
+private:
+	uint32_t nameID;
+	uint32_t methodID;
+	asAtom* args;
+	uint32_t numargs;
+public:
+	LocalConnectionEvent(uint32_t _nameID, uint32_t _methodID, asAtom* _args, uint32_t _numargs);
+	~LocalConnectionEvent();
+	EVENT_TYPE getEventType() const override { return LOCALCONNECTIONEVENT; }
 };
 
 class IdleEvent: public WaitableEvent
@@ -519,6 +578,28 @@ class IdleEvent: public WaitableEvent
 public:
 	IdleEvent(): WaitableEvent("IdleEvent") {}
 	EVENT_TYPE getEventType() const override { return IDLE_EVENT; }
+};
+
+class GetMouseTargetEvent: public WaitableEvent
+{
+public:
+	uint32_t x;
+	uint32_t y;
+	HIT_TYPE type;
+	_NR<DisplayObject> dispobj;
+	GetMouseTargetEvent(uint32_t _x, uint32_t _y, HIT_TYPE _type);
+	EVENT_TYPE getEventType() const override { return GETMOUSETARGET_EVENT; }
+};
+
+class FlushEventBufferEvent: public Event
+{
+friend class ABCVm;
+private:
+	bool append;
+	bool reverse;
+public:
+	FlushEventBufferEvent(bool _append = true, bool _reverse = false): Event(nullptr,nullptr, "FlushEventBufferEvent"),append(_append),reverse(_reverse) {}
+	EVENT_TYPE getEventType() const override { return FLUSH_EVENT_BUFFER; }
 };
 
 //Event to flush the invalidation queue
@@ -546,7 +627,7 @@ private:
 	_NR<InteractiveObject> target;
 	tiny_string text;
 public:
-	TextInputEvent(_NR<InteractiveObject> m, const tiny_string& s) : Event(nullptr,nullptr, "TextInputEvent"),target(m),text(s) {}
+	TextInputEvent(_NR<InteractiveObject> m, const tiny_string& s);
 	EVENT_TYPE getEventType() const override { return TEXTINPUT_EVENT; }
 };
 
@@ -605,8 +686,8 @@ class ContextMenuEvent: public Event
 private:
 	Event* cloneImpl() const override;
 public:
-	ContextMenuEvent(ASWorker* wrk, Class_base* c) : Event(wrk,c, "ContextMenuEvent") {}
-	ContextMenuEvent(ASWorker* wrk, Class_base* c, tiny_string t, _NR<InteractiveObject> target, _NR<InteractiveObject> owner) : Event(wrk,c, t,false,false,SUBTYPE_CONTEXTMENUEVENT),mouseTarget(target),contextMenuOwner(owner) {}
+	ContextMenuEvent(ASWorker* wrk, Class_base* c);
+	ContextMenuEvent(ASWorker* wrk, Class_base* c, tiny_string t, _NR<InteractiveObject> target, _NR<InteractiveObject> owner);
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
 	ASPROPERTY_GETTER_SETTER(_NR<InteractiveObject>,mouseTarget);

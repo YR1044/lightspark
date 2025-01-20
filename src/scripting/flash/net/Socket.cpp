@@ -24,8 +24,10 @@
 #include "class.h"
 #include "argconv.h"
 #include "swf.h"
+#include "threading.h"
 #include "flash/errors/flasherrors.h"
 #include "scripting/flash/utils/ByteArray.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "scripting/toplevel/Number.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
@@ -205,43 +207,43 @@ ASSocket::~ASSocket()
 void ASSocket::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),_close),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(c->getSystemState(),_connect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("connected","",Class<IFunction>::getFunction(c->getSystemState(),_connected,0,Class<Boolean>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("flush","",Class<IFunction>::getFunction(c->getSystemState(),_flush),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("bytesAvailable","",Class<IFunction>::getFunction(c->getSystemState(),bytesAvailable,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("endian","",Class<IFunction>::getFunction(c->getSystemState(),_getEndian),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("endian","",Class<IFunction>::getFunction(c->getSystemState(),_setEndian),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_getObjectEncoding,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_setObjectEncoding),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("readBoolean","",Class<IFunction>::getFunction(c->getSystemState(),readBoolean,0,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readByte","",Class<IFunction>::getFunction(c->getSystemState(),readByte,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readBytes","",Class<IFunction>::getFunction(c->getSystemState(),readBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(_close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("connect","",c->getSystemState()->getBuiltinFunction(_connect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("connected","",c->getSystemState()->getBuiltinFunction(_connected,0,Class<Boolean>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("flush","",c->getSystemState()->getBuiltinFunction(_flush),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("bytesAvailable","",c->getSystemState()->getBuiltinFunction(bytesAvailable,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("endian","",c->getSystemState()->getBuiltinFunction(_getEndian),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("endian","",c->getSystemState()->getBuiltinFunction(_setEndian),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",c->getSystemState()->getBuiltinFunction(_getObjectEncoding,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",c->getSystemState()->getBuiltinFunction(_setObjectEncoding),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("readBoolean","",c->getSystemState()->getBuiltinFunction(readBoolean,0,Class<Boolean>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readByte","",c->getSystemState()->getBuiltinFunction(readByte,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readBytes","",c->getSystemState()->getBuiltinFunction(readBytes),NORMAL_METHOD,true);
 
-	c->setDeclaredMethodByQName("readDouble","",Class<IFunction>::getFunction(c->getSystemState(),readDouble,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readFloat","",Class<IFunction>::getFunction(c->getSystemState(),readFloat,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readInt","",Class<IFunction>::getFunction(c->getSystemState(),readInt,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readMultiByte","",Class<IFunction>::getFunction(c->getSystemState(),readMultiByte,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readShort","",Class<IFunction>::getFunction(c->getSystemState(),readShort,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUnsignedByte","",Class<IFunction>::getFunction(c->getSystemState(),readUnsignedByte,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUnsignedInt","",Class<IFunction>::getFunction(c->getSystemState(),readUnsignedInt,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUnsignedShort","",Class<IFunction>::getFunction(c->getSystemState(),readUnsignedShort,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readObject","",Class<IFunction>::getFunction(c->getSystemState(),readObject),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUTF","",Class<IFunction>::getFunction(c->getSystemState(),readUTF,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUTFBytes","",Class<IFunction>::getFunction(c->getSystemState(),readUTFBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readDouble","",c->getSystemState()->getBuiltinFunction(readDouble,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readFloat","",c->getSystemState()->getBuiltinFunction(readFloat,0,Class<Number>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readInt","",c->getSystemState()->getBuiltinFunction(readInt,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readMultiByte","",c->getSystemState()->getBuiltinFunction(readMultiByte,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readShort","",c->getSystemState()->getBuiltinFunction(readShort,0,Class<Integer>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedByte","",c->getSystemState()->getBuiltinFunction(readUnsignedByte,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedInt","",c->getSystemState()->getBuiltinFunction(readUnsignedInt,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedShort","",c->getSystemState()->getBuiltinFunction(readUnsignedShort,0,Class<UInteger>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readObject","",c->getSystemState()->getBuiltinFunction(readObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUTF","",c->getSystemState()->getBuiltinFunction(readUTF,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUTFBytes","",c->getSystemState()->getBuiltinFunction(readUTFBytes),NORMAL_METHOD,true);
 
-	c->setDeclaredMethodByQName("writeBoolean","",Class<IFunction>::getFunction(c->getSystemState(),writeBoolean),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeUTF","",Class<IFunction>::getFunction(c->getSystemState(),writeUTF),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(c->getSystemState(),writeUTFBytes),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeBytes","",Class<IFunction>::getFunction(c->getSystemState(),writeBytes),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeByte","",Class<IFunction>::getFunction(c->getSystemState(),writeByte),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeDouble","",Class<IFunction>::getFunction(c->getSystemState(),writeDouble),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeFloat","",Class<IFunction>::getFunction(c->getSystemState(),writeFloat),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeInt","",Class<IFunction>::getFunction(c->getSystemState(),writeInt),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeMultiByte","",Class<IFunction>::getFunction(c->getSystemState(),writeMultiByte),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeUnsignedInt","",Class<IFunction>::getFunction(c->getSystemState(),writeUnsignedInt),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeObject","",Class<IFunction>::getFunction(c->getSystemState(),writeObject),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("writeShort","",Class<IFunction>::getFunction(c->getSystemState(),writeShort),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeBoolean","",c->getSystemState()->getBuiltinFunction(writeBoolean),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUTF","",c->getSystemState()->getBuiltinFunction(writeUTF),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUTFBytes","",c->getSystemState()->getBuiltinFunction(writeUTFBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeBytes","",c->getSystemState()->getBuiltinFunction(writeBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeByte","",c->getSystemState()->getBuiltinFunction(writeByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeDouble","",c->getSystemState()->getBuiltinFunction(writeDouble),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeFloat","",c->getSystemState()->getBuiltinFunction(writeFloat),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeInt","",c->getSystemState()->getBuiltinFunction(writeInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeMultiByte","",c->getSystemState()->getBuiltinFunction(writeMultiByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUnsignedInt","",c->getSystemState()->getBuiltinFunction(writeUnsignedInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeObject","",c->getSystemState()->getBuiltinFunction(writeObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeShort","",c->getSystemState()->getBuiltinFunction(writeShort),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c,timeout);
 
 	c->addImplementedInterface(InterfaceClass<IDataInput>::getClass(c->getSystemState()));
@@ -295,6 +297,10 @@ ASFUNCTIONBODY_ATOM(ASSocket, _close)
 	if (th->job)
 	{
 		th->job->requestClose();
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
 	}
 }
 
@@ -354,6 +360,8 @@ void ASSocket::connect(tiny_string host, int port)
 		~(SecurityManager::LOCAL_WITH_FILE),
 		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
 		true);
+	if (getInstanceWorker()->currentCallContext && getInstanceWorker()->currentCallContext->exceptionthrown)
+		return;
 
 	SecurityManager::EVALUATIONRESULT evaluationResult;
 	evaluationResult = getSys()->securityManager->evaluateSocketConnection(url, true);
@@ -388,15 +396,7 @@ ASFUNCTIONBODY_ATOM(ASSocket, bytesAvailable)
 {
 	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
 	Locker l(th->joblock);
-
-	if (th->job)
-	{
-		th->job->datareceive->lock();
-		asAtomHandler::setUInt(ret,wrk,th->job->datareceive->getLength());
-		th->job->datareceive->unlock();
-	}
-	else
-		asAtomHandler::setUInt(ret,wrk,0);
+	asAtomHandler::setUInt(ret,wrk, th->job != nullptr ? th->_bytesAvailable : 0);
 }
 
 ASFUNCTIONBODY_ATOM(ASSocket,_getEndian)
@@ -448,7 +448,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,readBoolean)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 	asAtomHandler::setBool(ret,res!=0);
@@ -468,7 +468,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,readByte)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 	asAtomHandler::setInt(ret,wrk,int32_t(res));
@@ -488,7 +488,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,readBytes)
 	{
 		th->job->datareceive->lock();
 		if (length == 0)
-			length = th->job->datareceive->getLength();
+			length = th->_bytesAvailable;
 		uint8_t buf[length];
 		th->job->datareceive->readBytes(0,length,buf);
 		th->job->datareceive->setPosition(length);
@@ -501,91 +501,271 @@ ASFUNCTIONBODY_ATOM(ASSocket,readBytes)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 }
 
 ASFUNCTIONBODY_ATOM(ASSocket,readDouble)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readDouble");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readDouble");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readFloat)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readFloat");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readFloat");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readInt)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readInt");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readInt");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readMultiByte)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readMultiByte");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readMultiByte");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readObject)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readObject");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readObject");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readShort)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readShort");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readShort");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readUnsignedByte)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedByte");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedByte");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readUnsignedInt)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedInt");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedInt");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readUnsignedShort)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedShort");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readUnsignedShort");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,readUTF)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.readUTF");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.readUTF");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 
 ASFUNCTIONBODY_ATOM(ASSocket,writeBoolean)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeBoolean");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeBoolean");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeByte)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeByte");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeByte");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeDouble)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeDouble");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeDouble");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeFloat)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeFloat");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeFloat");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeInt)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeInt");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeInt");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeUnsignedInt)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeUnsignedInt");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeUnsignedInt");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeMultiByte)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeMultiByte");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeMultiByte");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeObject)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeObject");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeObject");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeShort)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeShort");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeShort");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeUTF)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Socket.writeUTF");
+	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
+	Locker l(th->joblock);
+	if (th->job)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Socket.writeUTF");
+	}
+	else
+	{
+		createError<IOError>(wrk,kInvalidSocket);
+	}
 }
 
 ASFUNCTIONBODY_ATOM(ASSocket,writeUTFBytes)
@@ -602,32 +782,32 @@ ASFUNCTIONBODY_ATOM(ASSocket,writeUTFBytes)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 }
 ASFUNCTIONBODY_ATOM(ASSocket,writeBytes)
 {
 	ASSocket* th=asAtomHandler::as<ASSocket>(obj);
-	_NR<ByteArray> data;
-	uint32_t offset;
-	uint32_t length;
-	ARG_CHECK(ARG_UNPACK (data)(offset,0)(length,0));
-	if (data.isNull())
-		return;
-	if (offset >= data->getLength())
-	{
-		createError<RangeError>(wrk,kParamRangeError);
-		return;
-	}
-	if (offset+length > data->getLength())
-	{
-		createError<RangeError>(wrk,kParamRangeError);
-		return;
-	}
 	Locker l(th->joblock);
 	if (th->job)
 	{
+		_NR<ByteArray> data;
+		uint32_t offset;
+		uint32_t length;
+		ARG_CHECK(ARG_UNPACK (data)(offset,0)(length,0));
+		if (data.isNull())
+			return;
+		if (offset >= data->getLength())
+		{
+			createError<RangeError>(wrk,kParamRangeError);
+			return;
+		}
+		if (offset+length > data->getLength())
+		{
+			createError<RangeError>(wrk,kParamRangeError);
+			return;
+		}
 		if (length == 0)
 			length = data->getLength()-offset;
 		uint8_t buf[length];
@@ -638,7 +818,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,writeBytes)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 }
@@ -660,7 +840,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,readUTFBytes)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 		return;
 	}
 }
@@ -674,7 +854,7 @@ ASFUNCTIONBODY_ATOM(ASSocket,_flush)
 	}
 	else
 	{
-		createError<IOError>(wrk,0,"Socket is not connected");
+		createError<IOError>(wrk,kInvalidSocket);
 	}
 }
 
@@ -684,7 +864,7 @@ bool ASSocket::isConnected()
 	return job && job->isConnected();
 }
 
-ASSocket::ASSocket(ASWorker* wrk, Class_base* c) : EventDispatcher(wrk,c), job(nullptr), objectEncoding(OBJECT_ENCODING::AMF3), timeout(20000)
+ASSocket::ASSocket(ASWorker* wrk, Class_base* c) : EventDispatcher(wrk,c), job(nullptr), objectEncoding(OBJECT_ENCODING::AMF3), _bytesAvailable(0), timeout(20000)
 {
 }
 
@@ -819,15 +999,29 @@ void ASSocketThread::execute()
 	}
 }
 
+ssize_t ASSocketThread::receive()
+{
+	uint8_t buf[4096];
+	ssize_t size;
+	ssize_t total = 0;
+	if (datareceive->getPosition())
+		datareceive->removeFrontBytes(datareceive->getPosition());
+	do
+	{
+		size = sock.receive(buf, sizeof buf);
+		if (size > 0)
+			datareceive->append(buf,size);
+		total += size;
+	}
+	while (size == sizeof(buf));
+	return total;
+}
+
 void ASSocketThread::readSocket(const SocketIO& sock)
 {
-	uint8_t buf[1024];
-	size_t nbytes = sock.receive(buf, sizeof buf - 1);
-
+	ssize_t nbytes = receive();
 	if (nbytes > 0)
 	{
-		buf[nbytes] = '\0';
-		datareceive->writeBytes(buf,nbytes);
 		owner->incRef();
 		getVm(owner->getSystemState())->addEvent(owner, _MR(Class<ProgressEvent>::getInstanceS(owner->getInstanceWorker(),nbytes,0,"socketData")));
 	}

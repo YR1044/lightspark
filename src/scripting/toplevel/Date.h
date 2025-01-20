@@ -28,17 +28,26 @@ namespace lightspark
 class Date: public ASObject
 {
 private:
-	int64_t milliseconds;
+	number_t milliseconds;
 	int extrayears;
 	bool nan;
-	~Date();
 	GDateTime *datetime;
 	GDateTime *datetimeUTC;
-	asAtom msSinceEpoch();
-	int64_t getMsSinceEpoch();
+	number_t getMsSinceEpoch();
 	tiny_string toString_priv(bool utc, const char* formatstr) const;
-	void MakeDate(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute, int64_t second, int64_t millisecond, bool bIsLocalTime);
 	static number_t parse(tiny_string str);
+	int64_t getcurrentms();
+	GDateTime* getlocaldatetime(GDateTime* datetimeUTC);
+protected:
+	bool isValid() const { return !nan; }
+	int64_t getMs() const { return milliseconds; }
+	GDateTime* getDateTime() const { return datetime; }
+	GDateTime* getDateTime() { return datetime; }
+	GDateTime* getDateTimeUTC() { return datetimeUTC; }
+
+	asAtom msSinceEpoch();
+	void MakeDate(number_t year, number_t month, number_t day, number_t hour, number_t minute, number_t second, number_t millisecond, bool bIsLocalTime);
+	~Date();
 public:
 	Date(ASWorker* wrk,Class_base* c);
 	bool destruct()
@@ -47,15 +56,15 @@ public:
 			g_date_time_unref(datetimeUTC);
 		if (datetime)
 			g_date_time_unref(datetime);
-		datetime = NULL;
-		datetimeUTC = NULL;
+		datetime = nullptr;
+		datetimeUTC = nullptr;
 		extrayears = 0;
-		nan = false;
+		milliseconds=numeric_limits<double>::quiet_NaN();
+		nan = true;
 		return destructIntern();
 	}
 
 	static void sinit(Class_base*);
-	static void buildTraits(ASObject* o);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(generator);
 	ASFUNCTION_ATOM(UTC);
@@ -118,9 +127,10 @@ public:
 	ASFUNCTION_ATOM(toLocaleTimeString);
 
 	int getYear();
+	int getUTCYear();
 
 	
-	void MakeDateFromMilliseconds(int64_t ms);
+	void MakeDateFromMilliseconds(number_t ms);
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
 	TRISTATE isLessAtom(asAtom& r);

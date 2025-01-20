@@ -40,8 +40,8 @@ public:
 	ASPROPERTY_GETTER_SETTER(_NR<Matrix>, matrix);
 	ASPROPERTY_GETTER_SETTER(bool, repeat);
 	ASPROPERTY_GETTER_SETTER(bool, smooth);
-	FILLSTYLE toFillStyle();
-	void appendToTokens(std::vector<uint64_t>& tokens,Graphics* graphics);
+	FILLSTYLE toFillStyle() override;
+	void appendToTokens(tokensVector& tokens, Graphics* graphics) override;
 };
 
 }

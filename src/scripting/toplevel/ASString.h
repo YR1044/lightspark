@@ -35,12 +35,12 @@ class ASString: public ASObject
 {
 	friend ASObject* abstract_s(ASWorker* w);
 	friend ASObject* abstract_s(ASWorker* wrk, const char* s, uint32_t len);
-	friend ASObject* abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull);
+	friend ASObject* abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull, bool isInteger);
 	friend ASObject* abstract_s(ASWorker* wrk, const char* s);
 	friend ASObject* abstract_s(ASWorker* wrk, const tiny_string& s);
 	friend ASObject* abstract_s(ASWorker* wrk, uint32_t stringId);
 private:
-	number_t parseStringInfinite(const char *s, char **end) const;
+	static number_t parseStringInfinite(const char *s, char **end);
 	tiny_string data;
 	
 	// stores the position of utf8-characters in the string
@@ -96,6 +96,7 @@ public:
 	TRISTATE isLess(ASObject* r) override;
 	TRISTATE isLessAtom(asAtom& r) override;
 	number_t toNumber() override;
+	static number_t toNumber(ASWorker* wrk, const tiny_string& value);
 	int32_t toInt() override;
 	int32_t toIntStrict() override;
 	uint32_t toUInt() override;
@@ -144,7 +145,7 @@ public:
 };
 
 template<>
-inline bool Class<ASString>::coerce(ASWorker* wrk,asAtom& o) const
+inline bool Class<ASString>::coerce(ASWorker* wrk,asAtom& o)
 {
 	if (asAtomHandler::isString(o))
 		return false;

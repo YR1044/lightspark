@@ -20,17 +20,20 @@
 #ifndef SCRIPTING_FLASH_DISPLAY_BITMAPCONTAINER_H
 #define SCRIPTING_FLASH_DISPLAY_BITMAPCONTAINER_H 1
 
+#include "forwards/scripting/flash/geom/flashgeom.h"
 #include "compat.h"
 #include "memory_support.h"
 #include "smartrefs.h"
 #include "swftypes.h"
 #include <vector>
 #include "backends/graphics.h"
+#include "threading.h"
+#include "3rdparty/nanovg/src/nanovg.h"
 
 namespace lightspark
 {
 class BitmapFilter;
-class BitmapContainer : public RefCountable, public ITextureUploadable
+class BitmapContainer : public RefCountable
 {
 public:
 	enum BITMAP_FORMAT { RGB15, RGB24, RGB32, ARGB32 };
@@ -42,21 +45,32 @@ protected:
 	 * ARGB format. stride is the number of bytes per row, may be
 	 * larger than width. */
 	std::vector<uint8_t, reporter_allocator<uint8_t>> data;
-	// buffer to contain the 
+	// buffer to contain the pixels transformed by latest ColorTransformation
 	std::vector<uint8_t> data_colortransformed;
+	// color transformation values currently applied to data_colortransformed
+	ColorTransformBase currentcolortransform;
 	uint32_t *getDataNoBoundsChecking(int32_t x, int32_t y) const;
+	uint8_t* getCurrentData() const;
 public:
+	Semaphore renderevent;
 	TextureChunk bitmaptexture;
+	int nanoVGImageHandle;
+	cairo_pattern_t* cachedCairoPattern;
+	float* nanoVGGradientPattern;
 	BitmapContainer(MemoryAccount* m);
 	~BitmapContainer();
 	uint32_t getDataSize() const { return data.size(); }
-	uint8_t* getData() { return &data[0]; }
-	const uint8_t* getData() const { return &data[0]; }
+	uint8_t* getData() { return getCurrentData(); }
+	const uint8_t* getData() const { return getCurrentData(); }
+	uint8_t* getOriginalData() { return &data[0]; }
 	uint8_t* getDataColorTransformed() 
 	{
 		data_colortransformed.reserve(data.size());
 		return &data_colortransformed[0];
 	}
+	uint8_t *applyColorTransform(ColorTransform* ctransform);
+	uint8_t *applyColorTransform(number_t redMulti, number_t greenMulti, number_t blueMulti, number_t alphaMulti,
+								 number_t redOff, number_t greenOff, number_t blueOff, number_t alphaOff);
 	// this creates a new byte array that has to be deleted by the caller
 	uint8_t* getRectangleData(const RECT& sourceRect);
 	bool fromRGB(uint8_t* rgb, uint32_t width, uint32_t height, BITMAP_FORMAT format, bool frompng = false);
@@ -79,14 +93,14 @@ public:
 	void setAlpha(int32_t x, int32_t y, uint8_t alpha);
 	void setPixel(int32_t x, int32_t y, uint32_t color, bool setAlpha, bool ispremultiplied=true);
 	uint32_t getPixel(int32_t x, int32_t y, bool premultiplied=true) const;
-	std::vector<uint32_t> getPixelVector(const RECT& rect) const;
+	std::vector<uint32_t> getPixelVector(const RECT& rect, bool premultiplied=true) const;
 	void copyRectangle(_R<BitmapContainer> source, 
 			   const RECT& sourceRect,
 			   int32_t destX, int32_t destY,
 			   bool mergeAlpha);
 	void applyFilter(_R<BitmapContainer> source,
 				const RECT& sourceRect,
-				int32_t destX, int32_t destY,
+				number_t destX, number_t destY,
 				BitmapFilter* filter);
 	void fillRectangle(const RECT& rect, uint32_t color, bool useAlpha);
 	bool scroll(int32_t x, int32_t y);
@@ -96,13 +110,8 @@ public:
 	bool isEmpty() const { return data.empty(); }
 	void clear();
 
-	//ITextureUploadable interface
-	void sizeNeeded(uint32_t& w, uint32_t& h) const override { w=width; h=height; }
-	uint8_t* upload(bool refresh) override;
-	TextureChunk& getTexture() override;
-	void uploadFence() override;
-
-	bool checkTexture();
+	bool checkTextureForUpload(SystemState* sys);
+	void clone(BitmapContainer* c);
 };
 
 }

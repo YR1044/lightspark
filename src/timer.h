@@ -2,6 +2,7 @@
     Lightspark, a free flash player implementation
 
     Copyright (C) 2010-2013  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2024  mr b0nk 500 (b0nk@b0nk.xyz)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,8 +21,12 @@
 #ifndef TIMER_H
 #define TIMER_H 1
 
+#include "forwards/timer.h"
+#include "interfaces/timer.h"
+#include "utils/timespec.h"
 #include "compat.h"
 #include <list>
+#include <set>
 #include <ctime>
 #include "threading.h"
 
@@ -29,24 +34,16 @@ namespace lightspark
 {
 
 class SystemState;
-//Jobs that run on tick are supposed to be very short
-//For longer jobs use ThreadPool
-class ITickJob
-{
-friend class TimerThread;
-protected:
-	/*
-	   Helper flag to remove a job
 
-	   If the flag is true no more ticks will happen
-	*/
-	bool stopMe;
-public:
-	virtual void tick()=0;
-	ITickJob():stopMe(false){}
-	virtual ~ITickJob(){}
-	// This is called after tick() for single-shot jobs (i.e. enqueued with isTick==false)
-	virtual void tickFence() = 0;
+class Time : public ITime
+{
+	uint64_t getCurrentTime_ms() const override { return compat_msectiming(); }
+	uint64_t getCurrentTime_us() const override { return compat_usectiming(); }
+	uint64_t getCurrentTime_ns() const override { return compat_nsectiming(); }
+	TimeSpec now() const override { return TimeSpec::fromNs(compat_nsectiming()); }
+	void sleep_ms(uint32_t ms) override { compat_msleep(ms); }
+	void sleep_us(uint32_t us) override { compat_usleep(us); }
+	void sleep_ns(uint64_t ns) override { compat_nsleep(ns); }
 };
 
 class TimerThread
@@ -91,6 +88,76 @@ public:
 	 */
 	void removeJob(ITickJob* job);
 	void removeJob_noLock(ITickJob* job);
+};
+
+struct LSTimer
+{
+	enum Type
+	{
+		Wait,
+		Tick,
+		Frame,
+	};
+	Type type;
+	TimeSpec startTime;
+	// Fake/Ideal starting time, useful for deterministic timing.
+	TimeSpec fakeStartTime;
+	TimeSpec timeout;
+	ITickJob* job;
+
+	TimeSpec deadline() const { return startTime + timeout; }
+	TimeSpec fakeDeadline() const { return fakeStartTime + timeout; }
+	bool isWait() const { return type == Type::Wait; }
+	bool isTick() const { return type == Type::Tick; }
+	bool isFrame() const { return type == Type::Frame; }
+
+	bool operator==(const LSTimer& other) const { return deadline() == other.deadline(); }
+	bool operator!=(const LSTimer& other) const { return deadline() != other.deadline(); }
+	bool operator>=(const LSTimer& other) const { return deadline() >= other.deadline(); }
+	bool operator<=(const LSTimer& other) const { return deadline() <= other.deadline(); }
+	bool operator>(const LSTimer& other) const { return deadline() > other.deadline(); }
+	bool operator<(const LSTimer& other) const { return deadline() < other.deadline(); }
+};
+
+class LSTimers
+{
+	using TimerType = LSTimer::Type;
+private:
+	Mutex timerMutex;
+	std::multiset<LSTimer> timers;
+	TimeSpec currentTime;
+	// Fake/Ideal current time, useful for deterministic timing.
+	TimeSpec fakeCurrentTime;
+	TimeSpec curFrameTime;
+	TimeSpec nextFrameTime;
+	SystemState* sys;
+
+	// Maximum timer ticks per call to `updateTimers()`.
+	static constexpr int maxTicks = 10;
+	// Maximum frames per call to `updateTimers()`.
+	static constexpr int maxFrames = 5;
+
+	void pushTimer(const LSTimer& timer);
+	void pushTimerNoLock(const LSTimer& timer);
+	LSTimer popTimer();
+	LSTimer popTimerNoLock();
+	const LSTimer& peekTimer();
+	const LSTimer& peekTimerNoLock() const;
+
+	void addJob(const TimeSpec& time, const TimerType& type, ITickJob* job);
+	TimeSpec getFrameRate() const;
+public:
+	LSTimers(SystemState* _sys) : sys(_sys) {}
+
+	void addTick(const TimeSpec& tickTime, ITickJob* job) { addJob(tickTime, TimerType::Tick, job); }
+	void addFrameTick(ITickJob* job) { addJob(getFrameRate(), TimerType::Frame, job); }
+	void addWait(const TimeSpec& waitTime, ITickJob* job) { addJob(waitTime, TimerType::Wait, job); }
+	void removeJob(ITickJob* job);
+	void removeJobNoLock(ITickJob* job);
+	TimeSpec updateTimers(const TimeSpec& delta, bool allowFrameTimers = true);
+	TimeSpec getFakeCurrentTime() const { return fakeCurrentTime; }
+	void setFakeCurrentTime(const TimeSpec& time) { fakeCurrentTime = time; }
+	const LSTimer& getCurrentTimer() { return peekTimer(); }
 };
 
 class Chronometer

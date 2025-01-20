@@ -17,23 +17,26 @@ x86_64/*
 #
 CMakeFiles
 Makefile
-*.cmake
-# exception for files beyond conf/
-!conf/*
-
 CMakeCache.txt
 obj/
 obj-release/
 obj-debug/
+obj-memory/
 build/
 version.h
 
 # SWF files
 
 *.swf
+# Exception for test runner SWFs.
+!tests/test-runner/swfs/**/*.swf
 
 # Cscope
 cscope*
 
 #Testsuite
 tests/tamarin
+
+# QtCreator
+*.autosave
+CMakeLists.txt.user*

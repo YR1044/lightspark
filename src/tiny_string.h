@@ -23,16 +23,30 @@
 #include <cstring>
 #include <cstdint>
 #include <ostream>
+#include <limits>
 #include <list>
 /* for utf8 handling */
 #include <glib.h>
 #include "compat.h"
+#include <functional>
+
+#include "utils/optional.h"
+#include "utils/type_traits.h"
 
 /* forward declare for tiny_string conversion */
 typedef unsigned char xmlChar;
 
 namespace lightspark
 {
+
+class tiny_string;
+
+template<typename T, EnableIf<std::is_unsigned<T>::value, bool> = false>
+inline T convertToNumber(const tiny_string& str);
+template<typename T, EnableIf<std::is_signed<T>::value, bool> = false>
+inline T convertToNumber(const tiny_string& str);
+template<typename T, EnableIf<std::is_floating_point<T>::value, bool> = false>
+inline T convertToNumber(const tiny_string& str);
 
 /* Iterates over utf8 characters */
 class CharIterator /*: public forward_iterator<uint32_t>*/
@@ -88,6 +102,7 @@ public:
 class DLL_PUBLIC tiny_string
 {
 friend std::ostream& operator<<(std::ostream& s, const tiny_string& r);
+friend struct std::hash<lightspark::tiny_string>;
 private:
 	enum TYPE { READONLY=0, STATIC, DYNAMIC };
 	/*must be at least 6 bytes for tiny_string(uint32_t c) constructor */
@@ -112,13 +127,19 @@ private:
 	void createBuffer(uint32_t s);
 	void resizeBuffer(uint32_t s);
 	void resetToStatic();
+	void getTrimPositions(uint32_t& start, uint32_t &end) const;
 	void init();
 	bool isASCII:1;
 	bool hasNull:1;
+	bool isInteger:1;
 public:
 	static const uint32_t npos = (uint32_t)(-1);
 
-	tiny_string():_buf_static(),buf(_buf_static),stringSize(1),numchars(0),type(STATIC),isASCII(true),hasNull(false){buf[0]=0;}
+	tiny_string():_buf_static(),buf(_buf_static),stringSize(1),numchars(0),type(STATIC)
+		,isASCII(true),hasNull(false),isInteger(false)
+	{
+		buf[0]=0;
+	}
 	/* construct from utf character */
 	static tiny_string fromChar(uint32_t c);
 	tiny_string(const char* s,bool copy=false);
@@ -126,6 +147,7 @@ public:
 	tiny_string(const std::string& r);
 	tiny_string(std::istream& in, int len);
 	~tiny_string();
+	uint32_t operator[](size_t i) const { return charAt(i); }
 	tiny_string& operator=(const tiny_string& s);
 	tiny_string& operator=(const std::string& s);
 	tiny_string& operator=(const char* s);
@@ -159,6 +181,7 @@ public:
 		numchars = 0;
 		isASCII = true;
 		hasNull = false;
+		isInteger = false;
 	}
 	
 	/* returns the length in bytes, not counting the trailing \0 */
@@ -179,6 +202,10 @@ public:
 	{
 		return hasNull;
 	}
+	inline bool isIntegerValue() const
+	{
+		return isInteger;
+	}
 	inline void checkValidUTF()
 	{
 		if (!isASCII && !g_utf8_validate(buf,numBytes(),nullptr))
@@ -188,6 +215,13 @@ public:
 			numchars = stringSize-1;
 		}
 	}
+
+	// Returns a string with the supplied prefix removed, if found,
+	// otherwise it returns the original string.
+	tiny_string stripPrefix(const tiny_string& prefix, size_t offset = 0) const;
+	// Returns a string with the supplied sufffix removed, if found,
+	// otherwise it returns the original string.
+	tiny_string stripSuffix(const tiny_string& suffix, size_t offset = 0) const;
 	
 	/* start and len are indices of utf8-characters */
 	tiny_string substr(uint32_t start, uint32_t len) const;
@@ -200,7 +234,7 @@ public:
 	char* strchrr(char c) const;
 	/*explicit*/ operator std::string() const;
 
-	FORCE_INLINE void setValue(const char* s,int _numbytes, int _numchars, bool _isASCII, bool _hasNull, bool copy)
+	FORCE_INLINE void setValue(const char* s,int _numbytes, int _numchars, bool _isASCII, bool _hasNull, bool _isInteger, bool copy)
 	{
 		if(copy)
 		{
@@ -225,6 +259,7 @@ public:
 		numchars=_numchars;
 		isASCII=_isASCII;
 		hasNull=_hasNull;
+		isInteger=_isInteger;
 	}
 	FORCE_INLINE void setChar(uint32_t c)
 	{
@@ -240,9 +275,12 @@ public:
 			stringSize =  g_unichar_to_utf8(c,buf) + 1;
 		buf[stringSize-1] = '\0';
 		hasNull = c == 0;
+		isInteger = c >= '0' && c <= '9';
 		numchars = 1;
 	}
 	
+	bool startsWith(const tiny_string& str) const;
+	bool endsWith(const tiny_string& str) const;
 	bool startsWith(const char* o) const;
 	bool endsWith(const char* o) const;
 	/* idx is an index of utf-8 characters */
@@ -256,6 +294,10 @@ public:
 	 * returns index of character */
 	uint32_t find(const tiny_string& needle, uint32_t start = 0) const;
 	uint32_t rfind(const tiny_string& needle, uint32_t start = npos) const;
+	// fills line with the text from byteindex up to the next line terminator
+	// upon return byteindex will be set to the index after the next line terminator
+	// returns true if a line terminator was found
+	bool getLine(uint32_t& byteindex, tiny_string& line);
 	tiny_string& replace(uint32_t pos1, uint32_t n1, const tiny_string& o);
 	tiny_string& replace_bytes(uint32_t bytestart, uint32_t bytenum, const tiny_string& o);
 	tiny_string lowercase() const;
@@ -272,8 +314,86 @@ public:
 	CharIterator end();
 	CharIterator end() const;
 	int compare(const tiny_string& r) const;
+	template<typename T, EnableIf<std::is_arithmetic<T>::value, bool> = false>
+	bool toNumber(T& value) const
+	{
+		try
+		{
+			value = convertToNumber<T>(*this);
+			return true;
+		}
+		catch (std::exception&)
+		{
+			return false;
+		}
+	}
+	template<typename T, EnableIf<std::is_arithmetic<T>::value, bool> = false>
+	Optional<T> tryToNumber() const
+	{
+		try
+		{
+			return convertToNumber<T>(*this);
+		}
+		catch (std::exception&)
+		{
+			return {};
+		}
+	}
 	tiny_string toQuotedString() const;
+	// returns string that has whitespace characters removed at begin and end 
+	tiny_string removeWhitespace() const;
+	// returns true if the string is empty or only contains whitespace characters
+	bool isWhiteSpaceOnly() const;
+	// encodes all null bytes instring to xml notation ("&#x0;")
+	tiny_string encodeNull() const;
 };
 
+template<typename T, EnableIf<std::is_unsigned<T>::value, bool>>
+inline T convertToNumber(const tiny_string& str)
+{
+	auto num = std::stoull(str);
+	if (num > std::numeric_limits<T>::max())
+		throw std::out_of_range("Converted number is too big for T");
+	return num;
+}
+
+template<typename T, EnableIf<std::is_signed<T>::value, bool>>
+inline T convertToNumber(const tiny_string& str)
+{
+	auto num = std::stoll(str);
+	if (num > std::numeric_limits<T>::max())
+		throw std::out_of_range("Converted number is too big for T");
+	if (num < std::numeric_limits<T>::min())
+		throw std::out_of_range("Converted number is too small for T");
+	return num;
+}
+
+template<typename T, EnableIf<std::is_floating_point<T>::value, bool>>
+inline T convertToNumber(const tiny_string& str)
+{
+	auto num = std::stold(str);
+	if (num > std::numeric_limits<T>::max())
+		throw std::out_of_range("Converted number is too big for T");
+	if (num < std::numeric_limits<T>::lowest())
+		throw std::out_of_range("Converted number is too small for T");
+	return num;
+}
+
+}
+namespace std
+{
+// using djb2 hash function from http://www.cse.yorku.ca/~oz/hash.html
+template <>
+struct hash<lightspark::tiny_string>
+{
+	size_t operator()(const lightspark::tiny_string& s) const
+	{
+		size_t hash = 5381;
+		uint32_t n =0;
+		while (n++ < s.stringSize-1)
+			hash = ((hash << 5) + hash) + s.buf[n]; /* hash * 33 + c */
+		return hash;
+	}
+};
 }
 #endif /* TINY_STRING_H */

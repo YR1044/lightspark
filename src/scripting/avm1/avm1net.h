@@ -22,6 +22,7 @@
 
 #include "asobject.h"
 #include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/net/LocalConnection.h"
 #include "scripting/flash/net/XMLSocket.h"
 
 namespace lightspark
@@ -50,6 +51,7 @@ public:
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(sendAndLoad);
 	ASFUNCTION_ATOM(load);
+	bool destruct() override;
 	multiname* setVariableByMultiname(multiname& name, asAtom& o, CONST_ALLOWED_FLAG allowConst, bool* alreadyset, ASWorker* wrk) override;
 	void AVM1HandleEvent(EventDispatcher* dispatcher, Event* e) override;
 };

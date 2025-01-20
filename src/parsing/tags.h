@@ -25,13 +25,14 @@
 #include <iostream>
 #include "swftypes.h"
 #include "backends/geometry.h"
-#include "backends/decoder.h"
 #include "scripting/flash/display/flashdisplay.h"
+#include "scripting/flash/display/MovieClip.h"
 
 namespace lightspark
 {
 class Class_base;
 class RootMovieClip;
+class ApplicationDomain;
 class DisplayObjectContainer;
 class DefineSpriteTag;
 class AdditionalDataTag;
@@ -82,14 +83,13 @@ public:
 	*/
 	Class_base* bindedTo;
 	tiny_string bindingclassname;
-	RootMovieClip* loadedFrom;
+	ApplicationDomain* loadedFrom;
 	uint32_t nameID;
-	DictionaryTag(RECORDHEADER h, RootMovieClip* root):Tag(h),bindedTo(nullptr),loadedFrom(root),nameID(UINT32_MAX) { }
+	DictionaryTag(RECORDHEADER h, RootMovieClip* root);
 	TAGTYPE getType() const override { return DICT_TAG; }
 	virtual int getId() const=0;
 	virtual ASObject* instance(Class_base* c=nullptr) { return nullptr; }
 	virtual MATRIX MapToBounds(const MATRIX& mat) { return mat; }
-	virtual void resizeCompleted() {}
 };
 
 /*
@@ -115,7 +115,7 @@ public:
 	void execute(RootMovieClip* root) const override =0;
 };
 
-class AVM1ActionTag: public Tag
+class AVM1ActionTag: public DisplayListTag
 {
 private:
 	std::vector<uint8_t> actions;
@@ -123,8 +123,9 @@ private:
 public:
 	AVM1ActionTag(RECORDHEADER h, std::istream& s,RootMovieClip* root, AdditionalDataTag* datatag);
 	TAGTYPE getType() const override { return AVM1ACTION_TAG; }
-	void execute(MovieClip* clip, AVM1context *context);
+	void execute(DisplayObjectContainer* parent,bool inskipping) override;
 	bool empty() { return actions.empty(); }
+	void setActions(AVM1scriptToExecute& script) const;
 };
 class AVM1InitActionTag: public ControlTag
 {
@@ -148,14 +149,12 @@ protected:
 	RECT ShapeBounds;
 	SHAPEWITHSTYLE Shapes;
 	tokensVector* tokens;
-	TextureChunk chunk;
 	DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root);
 public:
 	DefineShapeTag(RECORDHEADER h,std::istream& in, RootMovieClip* root);
 	~DefineShapeTag();
 	int getId() const override { return ShapeId; }
 	ASObject* instance(Class_base* c=nullptr) override;
-	void resizeCompleted() override;
 };
 
 class DefineShape2Tag: public DefineShapeTag
@@ -179,9 +178,9 @@ class DefineShape4Tag: public DefineShape3Tag
 {
 private:
 	RECT EdgeBounds;
-	UB UsesFillWindingRule;
-	UB UsesNonScalingStrokes;
-	UB UsesScalingStrokes;
+	bool UsesFillWindingRule:1;
+	bool UsesNonScalingStrokes:1;
+	bool UsesScalingStrokes:1;
 public:
 	DefineShape4Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	int getId() const override { return ShapeId; }
@@ -203,9 +202,10 @@ protected:
 	DefineMorphShapeTag(RECORDHEADER h, RootMovieClip* root, int version):DictionaryTag(h,root),MorphLineStyles(version){}
 public:
 	DefineMorphShapeTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	~DefineMorphShapeTag();
 	int getId() const override { return CharacterId; }
 	ASObject* instance(Class_base* c=nullptr) override;
-	void getTokensForRatio(tokensVector& tokens, uint32_t ratio);
+	void getTokensForRatio(tokensVector** tokens, uint32_t ratio);
 };
 
 class DefineMorphShape2Tag: public DefineMorphShapeTag
@@ -213,8 +213,8 @@ class DefineMorphShape2Tag: public DefineMorphShapeTag
 private:
 	RECT StartEdgeBounds;
 	RECT EndEdgeBounds;
-	UB UsesNonScalingStrokes;
-	UB UsesScalingStrokes;
+	bool UsesNonScalingStrokes:1;
+	bool UsesScalingStrokes:1;
 public:
 	DefineMorphShape2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 };
@@ -225,22 +225,11 @@ friend class TextField;
 private:
 	UI16_SWF CharacterID;
 	RECT Bounds;
-	UB HasText;
-	UB WordWrap;
-	UB Multiline;
-	UB Password;
-	UB ReadOnly;
-	UB HasTextColor;
-	UB HasMaxLength;
-	UB HasFont;
-	UB HasFontClass;
-	UB AutoSize;
-	UB HasLayout;
-	UB NoSelect;
-	UB Border;
-	UB WasStatic;
-	UB HTML;
-	UB UseOutlines;
+	bool ReadOnly:1;
+	bool HasFont:1;
+	bool NoSelect:1;
+	bool WasStatic:1;
+	bool HTML:1;
 	UI16_SWF FontID;
 	STRING FontClass;
 	UI16_SWF FontHeight;
@@ -353,19 +342,20 @@ private:
 public:
 	RemoveObject2Tag(RECORDHEADER h, std::istream& in);
 	void execute(DisplayObjectContainer* parent,bool inskipping) override;
+	UI16_SWF getDepth() const { return Depth; }
 };
 
 class PlaceObject2Tag: public DisplayListTag
 {
 protected:
-	bool PlaceFlagHasClipAction;
-	bool PlaceFlagHasClipDepth;
-	bool PlaceFlagHasName;
-	bool PlaceFlagHasRatio;
-	bool PlaceFlagHasColorTransform;
-	bool PlaceFlagHasMatrix;
-	bool PlaceFlagHasCharacter;
-	bool PlaceFlagMove;
+	bool PlaceFlagHasClipAction:1;
+	bool PlaceFlagHasClipDepth:1;
+	bool PlaceFlagHasName:1;
+	bool PlaceFlagHasRatio:1;
+	bool PlaceFlagHasColorTransform:1;
+	bool PlaceFlagHasMatrix:1;
+	bool PlaceFlagHasCharacter:1;
+	bool PlaceFlagMove:1;
 	UI16_SWF Depth;
 	UI16_SWF CharacterId;
 	MATRIX Matrix;
@@ -377,7 +367,6 @@ protected:
 	virtual void setProperties(DisplayObject* obj, DisplayObjectContainer* parent) const;
 	DictionaryTag* placedTag;
 public:
-	STRING Name;
 	uint32_t NameID;
 	PlaceObject2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root, AdditionalDataTag* datatag);
 	void execute(DisplayObjectContainer* parent,bool inskipping) override;
@@ -386,18 +375,14 @@ public:
 class PlaceObject3Tag: public PlaceObject2Tag
 {
 private:
-	bool PlaceFlagOpaqueBackground;
-	bool PlaceFlagHasVisible;
-	bool PlaceFlagHasImage;
-	bool PlaceFlagHasClassName;
-	bool PlaceFlagHasCacheAsBitmap;
-	bool PlaceFlagHasBlendMode;
-	bool PlaceFlagHasFilterList;
+	bool PlaceFlagOpaqueBackground:1;
+	bool PlaceFlagHasVisible:1;
+	bool PlaceFlagHasBlendMode:1;
+	bool BitmapCache:1;
+	bool Visible:1;
+	AS_BLENDMODE BlendMode;
 	STRING ClassName;
 	FILTERLIST SurfaceFilterList;
-	UI8 BlendMode;
-	UI8 BitmapCache;
-	UI8 Visible;
 	RGBA BackgroundColor;
 
 public:
@@ -443,8 +428,7 @@ class DefineButtonTag: public DictionaryTag
 {
 private:
 	UI16_SWF ButtonId;
-	UB ReservedFlags;
-	bool TrackAsMenu;
+	bool TrackAsMenu:1;
 	std::vector<BUTTONRECORD> Characters;
 public:
 	std::vector<BUTTONCONDACTION> condactions;
@@ -487,7 +471,7 @@ protected:
 	bool FontFlagsItalic;
 	bool FontFlagsBold;
 	virtual number_t getRenderCharStartYPos() const =0;
-	std::list<FILLSTYLE> fillStyles;
+	std::map<int,std::vector<tokensVector>> cachedtokens;
 public:
 	/* Multiply the coordinates of the SHAPEs by this
 	 * value to get a resolution of 1024*20th pixel
@@ -495,17 +479,18 @@ public:
 	 */
 	const int scaling;
 	FontTag(RECORDHEADER h, int _scaling,RootMovieClip* root);
+	~FontTag();
 	std::vector<SHAPE>& getGlyphShapes()
 	{
 		return GlyphShapeTable;
 	}
+	void fillTokens(int glyphposition, const RGBA& color, tokensVector* tk, int scaling);
 	int getId() const override { return FontID; }
 	ASObject* instance(Class_base* c=nullptr) override;
 	const tiny_string getFontname() const { return fontname;}
-	virtual void fillTextTokens(tokensVector &tokens, const tiny_string text, int fontpixelsize, const list<FILLSTYLE>& fillstyleColor, int32_t leading,int32_t startposx, int32_t startposy)=0;
+	virtual tokensVector* fillTextTokens(tokensVector &tokens, const tiny_string text, int fontpixelsize,const RGBA& textColor, int32_t leading,int32_t startposx, int32_t startposy)=0;
 	virtual number_t getRenderCharAdvance(uint32_t index) const =0;
 	virtual void getTextBounds(const tiny_string& text, int fontpixelsize, number_t& width, number_t& height)=0;
-	const TextureChunk *getCharTexture(const CharIterator& chrIt, int fontpixelsize, uint32_t &codetableindex);
 	bool hasGlyphs(const tiny_string text) const;
 	virtual int32_t getLeading() const =0;
 	virtual int32_t getAscent() const =0;
@@ -522,7 +507,7 @@ public:
 	DefineFontTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	number_t getRenderCharAdvance(uint32_t index) const override;
 	void getTextBounds(const tiny_string& text, int fontpixelsize, number_t& width, number_t& height) override;
-	void fillTextTokens(tokensVector &tokens, const tiny_string text, int fontpixelsize, const list<FILLSTYLE>& fillstyleColor, int32_t leading, int32_t startposx, int32_t startposy) override;
+	tokensVector* fillTextTokens(tokensVector& tokens, const tiny_string text, int fontpixelsize,const RGBA& textColor, int32_t leading, int32_t startposx, int32_t startposy) override;
 	int32_t getLeading() const override { return 1024; }
 	int32_t getAscent() const override { return 1024; }
 	int32_t getDescent() const override { return 1024; }
@@ -539,9 +524,9 @@ class DefineFont2Tag: public FontTag
 	friend class DefineTextTag; 
 private:
 	std::vector<uint32_t> OffsetTable;
-	bool FontFlagsHasLayout;
-	bool FontFlagsWideOffsets;
-	bool FontFlagsWideCodes;
+	bool FontFlagsHasLayout:1;
+	bool FontFlagsWideOffsets:1;
+	bool FontFlagsWideCodes:1;
 	LANGCODE LanguageCode;
 	UI16_SWF NumGlyphs;
 	uint32_t CodeTableOffset;
@@ -558,7 +543,7 @@ public:
 	DefineFont2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	number_t getRenderCharAdvance(uint32_t index) const override;
 	void getTextBounds(const tiny_string& text, int fontpixelsize, number_t& width, number_t& height) override;
-	void fillTextTokens(tokensVector &tokens, const tiny_string text, int fontpixelsize, const list<FILLSTYLE>& fillstyleColor, int32_t leading,int32_t startposx, int32_t startposy) override;
+	tokensVector* fillTextTokens(tokensVector& tokens, const tiny_string text, int fontpixelsize,const RGBA& textColor, int32_t leading, int32_t startposx, int32_t startposy) override;
 	int32_t getLeading() const override { return FontLeading; }
 	int32_t getAscent() const override { return FontAscent; }
 	int32_t getDescent() const override { return FontDescent; }
@@ -568,9 +553,9 @@ class DefineFont3Tag: public FontTag
 {
 private:
 	std::vector<uint32_t> OffsetTable;
-	UB FontFlagsHasLayout;
-	UB FontFlagsWideOffsets;
-	UB FontFlagsWideCodes;
+	bool FontFlagsHasLayout:1;
+	bool FontFlagsWideOffsets:1;
+	bool FontFlagsWideCodes:1;
 	LANGCODE LanguageCode;
 	UI16_SWF NumGlyphs;
 	uint32_t CodeTableOffset;
@@ -587,7 +572,7 @@ public:
 	DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	number_t getRenderCharAdvance(uint32_t index) const override;
 	void getTextBounds(const tiny_string& text, int fontpixelsize, number_t& width, number_t& height) override;
-	void fillTextTokens(tokensVector &tokens, const tiny_string text, int fontpixelsize, const list<FILLSTYLE>& fillstyleColor, int32_t leading, int32_t startposx, int32_t startposy) override;
+	tokensVector* fillTextTokens(tokensVector& tokens, const tiny_string text, int fontpixelsize,const RGBA& textColor, int32_t leading, int32_t startposx, int32_t startposy) override;
 	int32_t getLeading() const override { return FontLeading/20; }
 	int32_t getAscent() const override { return FontAscent/20; }
 	int32_t getDescent() const override { return FontDescent/20; }
@@ -597,9 +582,9 @@ class DefineFont4Tag : public DictionaryTag
 {
 private:
 	UI16_SWF FontID;
-	UB FontFlagsHasFontData;
-	UB FontFlagsItalic;
-	UB FontFlagsBold;
+	bool FontFlagsHasFontData:1;
+	bool FontFlagsItalic:1;
+	bool FontFlagsBold:1;
 	STRING FontName;
 public:
 	DefineFont4Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root);
@@ -623,6 +608,7 @@ private:
 public:
 	int version;
 	DefineTextTag(RECORDHEADER h, std::istream& in,RootMovieClip* root,int v=1);
+	~DefineTextTag();
 	int getId() const override { return CharacterId; }
 	ASObject* instance(Class_base* c=nullptr) override;
 };
@@ -813,7 +799,7 @@ public:
 	~VideoFrameTag();
 	void execute(DisplayObjectContainer* parent, bool inskipping) override {}
 	uint8_t* getData() { return framedata; }
-	uint32_t getNumBytes() { return numbytes+AV_INPUT_BUFFER_PADDING_SIZE; }
+	uint32_t getNumBytes();
 	uint32_t getFrameNumber() { return FrameNum; }
 };
 

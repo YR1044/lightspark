@@ -21,16 +21,21 @@
 #include "compat.h"
 #include "exceptions.h"
 #include "scripting/abcutils.h"
-#include "scripting/class.h"
 #include "scripting/toplevel/ASString.h"
+#include "scripting/toplevel/Global.h"
+#include "scripting/toplevel/IFunction.h"
+#include "scripting/toplevel/Namespace.h"
 #include "scripting/toplevel/RegExp.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "parsing/streams.h"
 #include <string>
 #include <sstream>
 
 using namespace std;
 using namespace lightspark;
+
+extern bool checkPropertyException(const asAtom& obj, multiname* name, asAtom& prop, ASWorker* wrk);
 
 void ABCVm::abc_bkpt(call_context* context)
 {
@@ -488,61 +493,61 @@ void ABCVm::abc_hasnext2(call_context* context)
 void ABCVm::abc_li8(call_context* context)
 {
 	LOG_CALL( "li8");
-	ApplicationDomain::loadIntN<uint8_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::loadIntN<uint8_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_li16(call_context* context)
 {
 	LOG_CALL( "li16");
-	ApplicationDomain::loadIntN<uint16_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::loadIntN<uint16_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_li32(call_context* context)
 {
 	LOG_CALL( "li32");
-	ApplicationDomain::loadIntN<int32_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::loadIntN<int32_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_lf32(call_context* context)
 {
 	LOG_CALL( "lf32");
-	ApplicationDomain::loadFloat(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::loadFloat(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_lf64(call_context* context)
 {
 	LOG_CALL( "lf64");
-	ApplicationDomain::loadDouble(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::loadDouble(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_si8(call_context* context)
 {
 	LOG_CALL( "si8");
-	ApplicationDomain::storeIntN<uint8_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::storeIntN<uint8_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_si16(call_context* context)
 {
 	LOG_CALL( "si16");
-	ApplicationDomain::storeIntN<uint16_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::storeIntN<uint16_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_si32(call_context* context)
 {
 	LOG_CALL( "si32");
-	ApplicationDomain::storeIntN<uint32_t>(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::storeIntN<uint32_t>(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_sf32(call_context* context)
 {
 	LOG_CALL( "sf32");
-	ApplicationDomain::storeFloat(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::storeFloat(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_sf64(call_context* context)
 {
 	LOG_CALL( "sf64");
-	ApplicationDomain::storeDouble(context->mi->context->root->applicationDomain.getPtr(), context);
+	ApplicationDomain::storeDouble(context->mi->context->applicationDomain, context);
 	++(context->exec_pos);
 }
 void ABCVm::abc_newfunction(call_context* context)
@@ -560,9 +565,11 @@ void ABCVm::abc_call(call_context* context)
 }
 void ABCVm::abc_construct(call_context* context)
 {
+	context->explicitConstruction = true;
 	uint32_t t = context->exec_pos->arg3_uint;
 	construct(context,t);
 	++(context->exec_pos);
+	context->explicitConstruction = false;
 }
 void ABCVm::abc_callMethod(call_context* context)
 {
@@ -757,7 +764,7 @@ void ABCVm::abc_getlex(call_context* context)
 		RUNTIME_STACK_PEEK_CREATE(context,v);
 
 		instrptr->cacheobj1 = asAtomHandler::getObject(*v);
-		instrptr->cacheobj2 = asAtomHandler::getClosure(*v);
+		instrptr->cacheobj2 = asAtomHandler::getObject(asAtomHandler::getClosureAtom(*v,asAtomHandler::invalidAtom));
 	}
 	++(context->exec_pos);
 }
@@ -794,7 +801,7 @@ void ABCVm::abc_setproperty(call_context* context)
 	ASObject* o = asAtomHandler::toObject(*obj,context->worker);
 	bool alreadyset=false;
 	o->setVariableByMultiname(*name,*value,ASObject::CONST_NOT_ALLOWED,&alreadyset,context->worker);
-	if (alreadyset)
+	if (alreadyset || context->exceptionthrown)
 		ASATOM_DECREF_POINTER(value);
 	o->decRef();
 	name->resetNameIfObject();
@@ -853,12 +860,14 @@ void ABCVm::abc_getProperty(call_context* context)
 			LOG_CALL("Calling the getter for " << *context->mi->context->getMultiname(t,context) << " on " << obj->toDebugString());
 			assert(instrptr->cacheobj2->type == T_FUNCTION);
 			IFunction* f = instrptr->cacheobj2->as<IFunction>();
-			f->callGetter(prop,instrptr->cacheobj3 ? instrptr->cacheobj3 : obj,context->worker);
+			asAtom closure = asAtomHandler::fromObject(instrptr->cacheobj3 ? instrptr->cacheobj3 : obj);
+			f->callGetter(prop,closure,context->worker);
 			LOG_CALL("End of getter"<< ' ' << f->toDebugString()<<" result:"<<asAtomHandler::toDebugString(prop));
 			if(asAtomHandler::isInvalid(prop))
 			{
 				multiname* name=context->mi->context->getMultiname(t,context);
-				if (checkPropertyException(obj,name,prop))
+				asAtom o = asAtomHandler::fromObject(obj);
+				if (checkPropertyException(o,name,prop,context->worker))
 				{
 					obj->decRef();
 					return;
@@ -887,9 +896,9 @@ void ABCVm::abc_getProperty(call_context* context)
 		LOG_CALL("Calling the getter for " << *name << " on " << obj->toDebugString());
 		assert(asAtomHandler::isFunction(prop));
 		IFunction* f = asAtomHandler::as<IFunction>(prop);
-		ASObject* closure = asAtomHandler::getClosure(prop);
+		asAtom closure = asAtomHandler::getClosureAtom(prop,asAtomHandler::fromObject(obj));
 		prop = asAtom();
-		f->callGetter(prop,closure ? closure : obj,context->worker);
+		f->callGetter(prop,closure,context->worker);
 		LOG_CALL("End of getter"<< ' ' << f->toDebugString()<<" result:"<<asAtomHandler::toDebugString(prop));
 		if(asAtomHandler::isValid(prop))
 		{
@@ -899,12 +908,13 @@ void ABCVm::abc_getProperty(call_context* context)
 			instrptr->cacheobj2 = f;
 			if (f->clonedFrom)
 				f->incRef();
-			instrptr->cacheobj3 = closure;
+			instrptr->cacheobj3 = asAtomHandler::getObject(asAtomHandler::getClosureAtom(prop,asAtomHandler::invalidAtom));
 		}
 	}
 	if(asAtomHandler::isInvalid(prop))
 	{
-		if (checkPropertyException(obj,name,prop))
+		asAtom o = asAtomHandler::fromObject(obj);
+		if (checkPropertyException(o,name,prop,context->worker))
 		{
 			obj->decRef();
 			return;
@@ -1084,7 +1094,7 @@ void ABCVm::abc_coerce(call_context* context)
 	multiname* mn = context->exec_pos->cachedmultiname2;
 	LOG_CALL("coerce " << *mn);
 	RUNTIME_STACK_POINTER_CREATE(context,o);
-	const Type* type = mn->cachedType != nullptr ? mn->cachedType : Type::getTypeFromMultiname(mn, context->mi->context);
+	Type* type = mn->cachedType != nullptr ? mn->cachedType : Type::getTypeFromMultiname(mn, context->mi->context);
 	if (type == nullptr)
 	{
 		LOG(LOG_ERROR,"coerce: type not found:"<< *mn);
@@ -1154,9 +1164,7 @@ void ABCVm::abc_increment(call_context* context)
 {
 	RUNTIME_STACK_POINTER_CREATE(context,pval);
 	LOG_CALL("increment "<<asAtomHandler::toDebugString(*pval));
-	asAtom oldval = *pval;
-	asAtomHandler::increment(*pval,context->worker);
-	ASATOM_DECREF(oldval);
+	asAtomHandler::increment(*pval,context->worker,true);
 	++(context->exec_pos);
 }
 void ABCVm::abc_inclocal(call_context* context)
@@ -1168,9 +1176,8 @@ void ABCVm::abc_inclocal(call_context* context)
 void ABCVm::abc_decrement(call_context* context)
 {
 	RUNTIME_STACK_POINTER_CREATE(context,pval);
-	asAtom oldval = *pval;
-	asAtomHandler::decrement(*pval,context->worker);
-	ASATOM_DECREF(oldval);
+	LOG_CALL("decrement "<<asAtomHandler::toDebugString(*pval));
+	asAtomHandler::decrement(*pval,context->worker,true);
 	++(context->exec_pos);
 }
 void ABCVm::abc_declocal(call_context* context)
@@ -1419,6 +1426,7 @@ void ABCVm::abc_instanceof(call_context* context)
 	RUNTIME_STACK_POINTER_CREATE(context,pval);
 	bool ret = instanceOf(asAtomHandler::toObject(*pval,context->worker),type);
 	ASATOM_DECREF_POINTER(pval);
+	type->decRef();
 	asAtomHandler::setBool(*pval,ret);
 	++(context->exec_pos);
 }

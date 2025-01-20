@@ -32,14 +32,19 @@
 
 #include "exceptions.h"
 #include "compat.h"
+#include "backends/geometry.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "scripting/flash/geom/flashgeom.h"
-#include "scripting/toplevel/toplevel.h"
+#include "scripting/toplevel/Array.h"
+#include "scripting/toplevel/ASQName.h"
 #include "scripting/toplevel/Number.h"
+#include "scripting/toplevel/Null.h"
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
+#include "scripting/toplevel/Undefined.h"
 #include "parsing/tags.h"
 
 
@@ -61,18 +66,11 @@ const tiny_string multiname::qualifiedString(SystemState* sys, bool forDescribeT
 		tiny_string ret=nsName;
 		ret+="::";
 		ret+=name;
-		if (forDescribeType && ret.startsWith("__AS3__.vec::Vector$"))
-		{
-			tiny_string ret2 = "__AS3__.vec::Vector.<";
-			ret2 += ret.substr(strlen("__AS3__.vec::Vector$"),ret.numChars());
-			ret2 += ">";
-			return ret2;
-		}
 		return ret;
 	}
 }
 
-const tiny_string multiname::normalizedName(SystemState* sys) const
+const tiny_string multiname::normalizedName(ASWorker* wrk) const
 {
 	switch(name_type)
 	{
@@ -83,9 +81,9 @@ const tiny_string multiname::normalizedName(SystemState* sys) const
 		case multiname::NAME_NUMBER:
 			return Number::toString(name_d);
 		case multiname::NAME_STRING:
-			return sys->getStringFromUniqueId(name_s_id);
+			return wrk->getSystemState()->getStringFromUniqueId(name_s_id);
 		case multiname::NAME_OBJECT:
-			return name_o ? name_o->toString() : "*";
+			return asAtomHandler::isValid(name_o) ? asAtomHandler::toString(name_o,wrk) : "*";
 		default:
 			assert("Unexpected name kind" && false);
 			//Should never reach this
@@ -93,7 +91,7 @@ const tiny_string multiname::normalizedName(SystemState* sys) const
 	}
 }
 
-uint32_t multiname::normalizedNameId(SystemState* sys) const
+uint32_t multiname::normalizedNameId(ASWorker* wrk) const
 {
 	switch(name_type)
 	{
@@ -106,7 +104,7 @@ uint32_t multiname::normalizedNameId(SystemState* sys) const
 			if (name_s_id != UINT32_MAX)
 				return name_s_id;
 			else
-				return sys->getUniqueStringId(normalizedName(sys));
+				return wrk->getSystemState()->getUniqueStringId(normalizedName(wrk));
 		default:
 			assert("Unexpected name kind" && false);
 			//Should never reach this
@@ -127,7 +125,7 @@ const tiny_string multiname::normalizedNameUnresolved(SystemState* sys) const
 		case multiname::NAME_STRING:
 			return sys->getStringFromUniqueId(name_s_id);
 		case multiname::NAME_OBJECT:
-			return name_o ? name_o->getClassName() : "*";
+			return asAtomHandler::isValid(name_o) ? asAtomHandler::getObjectNoCheck(name_o)->getClassName() : "*";
 		default:
 			assert("Unexpected name kind" && false);
 			//Should never reach this
@@ -137,9 +135,9 @@ const tiny_string multiname::normalizedNameUnresolved(SystemState* sys) const
 
 void multiname::setName(asAtom& n,ASWorker* w)
 {
-	if (name_type==NAME_OBJECT && name_o!=nullptr) {
-		name_o->decRef();
-		name_o = nullptr;
+	if (name_type==NAME_OBJECT) {
+		ASATOM_DECREF(name_o);
+		name_o = asAtomHandler::invalidAtom;
 	}
 
 	switch(asAtomHandler::getObjectType(n))
@@ -163,10 +161,10 @@ void multiname::setName(asAtom& n,ASWorker* w)
 		isInteger=false;
 		break;
 	case T_BOOLEAN:
-		name_i=asAtomHandler::toInt(n);
-		name_type = NAME_INT;
+		name_o=n;
+		name_type = NAME_OBJECT;
 		name_s_id = UINT32_MAX;
-		isInteger=true;
+		isInteger=false;
 		break;
 	case T_QNAME:
 		{
@@ -184,20 +182,20 @@ void multiname::setName(asAtom& n,ASWorker* w)
 		}
 		break;
 	case T_NULL:
-		name_o=w->getSystemState()->getNullRef();
+		name_o=asAtomHandler::nullAtom;
 		name_type = NAME_OBJECT;
 		name_s_id = UINT32_MAX;
 		isInteger=false;
 		break;
 	case T_UNDEFINED:
-		name_o=w->getSystemState()->getUndefinedRef();
+		name_o=asAtomHandler::undefinedAtom;
 		name_type = NAME_OBJECT;
 		name_s_id = UINT32_MAX;
 		isInteger=false;
 		break;
 	default:
 		ASATOM_INCREF(n);
-		name_o=asAtomHandler::getObject(n);
+		name_o=n;
 		name_type = NAME_OBJECT;
 		name_s_id = UINT32_MAX;
 		isInteger=false;
@@ -207,14 +205,14 @@ void multiname::setName(asAtom& n,ASWorker* w)
 
 void multiname::resetNameIfObject()
 {
-	if(name_type==NAME_OBJECT && name_o)
+	if(name_type==NAME_OBJECT)
 	{
-		name_o->decRef();
-		name_o=nullptr;
+		ASATOM_DECREF(name_o);
+		name_o = asAtomHandler::invalidAtom;
 	}
 }
 
-bool multiname::toUInt(SystemState* sys, uint32_t& index, bool acceptStringFractions, bool *isNumber) const
+bool multiname::toUInt(ASWorker* wrk, uint32_t& index, bool acceptStringFractions, bool *isNumber, bool forAVM1) const
 {
 	if (isNumber)
 		*isNumber = false;
@@ -228,19 +226,25 @@ bool multiname::toUInt(SystemState* sys, uint32_t& index, bool acceptStringFract
 			if(name_type==multiname::NAME_STRING)
 			{
 				if (name_s_id < BUILTIN_STRINGS::LAST_BUILTIN_STRING &&
-					(name_s_id < 0x30 || name_s_id > 0x39)) // char 0-9
+					((name_s_id < 0x30) || (name_s_id > 0x39))) // char 0-9
 					return false;
-				str=sys->getStringFromUniqueId(name_s_id);
+				str=wrk->getSystemState()->getStringFromUniqueId(name_s_id);
 			}
 			else
-				str=name_o->toString();
+				str=asAtomHandler::toString(name_o,wrk);
 
 			if(str.empty())
 				return false;
 			index=0;
 			uint64_t parsed = 0;
+			bool isnegative=false;
 			for(auto i=str.begin(); i!=str.end(); ++i)
 			{
+				if (*i == '-')
+				{
+					isnegative=true;
+					continue;
+				}
 				if (*i == '.' && acceptStringFractions)
 				{
 					if (i==str.begin())
@@ -262,14 +266,17 @@ bool multiname::toUInt(SystemState* sys, uint32_t& index, bool acceptStringFract
 					return false;
 				parsed*=10;
 				parsed+=i.digit_value();
-				if (parsed > UINT32_MAX)
+				if (parsed > UINT32_MAX && !forAVM1)
 					break;
 			}
-
-			if (parsed > UINT32_MAX)
+			if (isNumber)
+				*isNumber = true;
+			if (parsed > UINT32_MAX && !forAVM1)
 				return false;
 
 			index = (uint32_t)parsed;
+			if (isnegative)
+				return false;
 			break;
 		}
 		//This is already an int, so its good enough
@@ -282,8 +289,16 @@ bool multiname::toUInt(SystemState* sys, uint32_t& index, bool acceptStringFract
 			index=name_ui;
 			break;
 		case multiname::NAME_NUMBER:
-			if(!Number::isInteger(name_d) || name_d < 0 || name_d > UINT32_MAX)
-				return false;
+			if (forAVM1)
+			{
+				if(!Number::isInteger(name_d) || name_d > UINT32_MAX)
+					return false;
+			}
+			else
+			{
+				if(!Number::isInteger(name_d) || name_d < 0 || name_d > UINT32_MAX)
+					return false;
+			}
 			index=name_d;
 			break;
 		default:
@@ -358,7 +373,7 @@ std::ostream& lightspark::operator<<(std::ostream& s, const multiname& r)
 	else if(r.name_type==multiname::NAME_STRING)
 		s << getSys()->getStringFromUniqueId(r.name_s_id);
 	else
-		s << r.name_o; //We print the hexadecimal value
+		s << asAtomHandler::toDebugString(r.name_o);
 	return s;
 }
 
@@ -366,8 +381,18 @@ lightspark::RECT::RECT():Xmin(0),Xmax(0),Ymin(0),Ymax(0)
 {
 }
 
-lightspark::RECT::RECT(int a, int b, int c, int d):Xmin(a),Xmax(b),Ymin(c),Ymax(d)
+lightspark::RECT::RECT(int32_t a, int32_t b, int32_t c, int32_t d):Xmin(a),Xmax(b),Ymin(c),Ymax(d)
 {
+}
+
+bool RECT::operator==(const RECT& r) const
+{
+	return Xmin==r.Xmin && Xmax==r.Xmax && Ymin==r.Ymin && Ymax==r.Ymax;
+}
+
+RECT::operator RectF() const
+{
+	return RectF { Vector2f(Xmin, Ymin), Vector2f(Xmax, Ymax) };
 }
 
 std::ostream& lightspark::operator<<(std::ostream& s, const RECT& r)
@@ -430,6 +455,44 @@ bool MATRIX::isInvertible() const
 	return (fabs(den) > 1e-6);
 }
 
+// algorithm for scale and rotation getters taken from https://math.stackexchange.com/questions/13150/extracting-rotation-scale-values-from-2d-transformation-matrix
+// this handles negative scales properly
+number_t MATRIX::getScaleX() const
+{
+	number_t ret = 0;
+	if (xx != 0 || yx != 0)
+		ret = sqrt(xx * xx + yx * yx);
+	else if (xy != 0 || yy != 0)
+		ret = (xx * yy - yx * xy) / sqrt(xy * xy + yy * yy);
+	return ret;
+}
+
+number_t MATRIX::getScaleY() const
+{
+	number_t ret = 0;
+	if (xx != 0 || yx != 0)
+		ret = (xx * yy - yx * xy) / sqrt(xx * xx + yx * yx);
+	else if (xy != 0 || yy != 0)
+		ret = sqrt(xy * xy + yy * yy);
+	return ret;
+}
+
+number_t MATRIX::getRotation() const
+{
+	number_t ret = 0;
+	if (xx != 0 || yx != 0)
+	{
+		ret = sqrt(xx * xx + yx * yx);
+		ret = yx > 0 ? acos(xx / ret) : -acos(xx / ret);
+	}
+	else if (xy != 0 || yy != 0)
+	{
+		ret = sqrt(xy * xy + yy * yy);
+		ret = M_PI / 2.0 - (yy > 0 ? acos(-xy / ret) : -acos(xy / ret));
+	}
+	return ret*180/M_PI;
+}
+
 void MATRIX::get4DMatrix(float matrix[16]) const
 {
 	memset(matrix,0,sizeof(float)*16);
@@ -480,6 +543,11 @@ bool MATRIX::operator!=(const MATRIX& r) const
 {
 	return xx!=r.xx || yx!=r.yx || xy!=r.xy || yy!=r.yy ||
 		x0!=r.x0 || y0!=r.y0;
+}
+bool MATRIX::operator==(const MATRIX& r) const
+{
+	return xx==r.xx && yx==r.yx && xy==r.xy && yy==r.yy &&
+		x0==r.x0 && y0==r.y0;
 }
 
 std::ostream& lightspark::operator<<(std::ostream& s, const MATRIX& r)
@@ -741,7 +809,7 @@ istream& lightspark::operator>>(istream& s, MORPHLINESTYLE2& v)
 	v.EndCapStyle = UB(2,bs);
 	if(v.JoinStyle==2)
 		s >> v.MiterLimitFactor;
-	if(v.HasFillFlag==0)
+	if(!v.HasFillFlag)
 		s >> v.StartColor >> v.EndColor;
 	else
 		s >> v.FillType;
@@ -751,18 +819,21 @@ istream& lightspark::operator>>(istream& s, MORPHLINESTYLE2& v)
 std::istream& lightspark::operator>>(std::istream& in, TEXTRECORD& v)
 {
 	BitStream bs(in);
-	v.TextRecordType=UB(1,bs);
-	v.StyleFlagsReserved=UB(3,bs);
-	if(v.StyleFlagsReserved)
+	bool TextRecordType=UB(1,bs);
+	v.empty=!TextRecordType;
+	UB StyleFlagsReserved=UB(3,bs);
+	if(StyleFlagsReserved)
 		LOG(LOG_ERROR,"Reserved bits not so reserved");
-	v.StyleFlagsHasFont=UB(1,bs);
+	bool StyleFlagsHasFont=UB(1,bs);
 	v.StyleFlagsHasColor=UB(1,bs);
 	v.StyleFlagsHasYOffset=UB(1,bs);
 	v.StyleFlagsHasXOffset=UB(1,bs);
-	if(!v.TextRecordType)
+	if(!TextRecordType)
 		return in;
-	if(v.StyleFlagsHasFont)
+	if(StyleFlagsHasFont)
 		in >> v.FontID;
+	else
+		v.FontID=0;
 	if(v.StyleFlagsHasColor)
 	{
 		if(v.parent->version==1)
@@ -784,7 +855,7 @@ std::istream& lightspark::operator>>(std::istream& in, TEXTRECORD& v)
 		in >> v.XOffset;
 	if(v.StyleFlagsHasYOffset)
 		in >> v.YOffset;
-	if(v.StyleFlagsHasFont)
+	if(StyleFlagsHasFont)
 		in >> v.TextHeight;
 	UI8 GlyphCount;
 	in >> GlyphCount;
@@ -793,7 +864,6 @@ std::istream& lightspark::operator>>(std::istream& in, TEXTRECORD& v)
 	{
 		v.GlyphEntries.push_back(GLYPHENTRY(&v,bs));
 	}
-
 	return in;
 }
 
@@ -825,24 +895,8 @@ std::istream& lightspark::operator>>(std::istream& s, GRADIENT& v)
 		v.GradientRecords.push_back(gr);
 	}
 	sort(v.GradientRecords.begin(),v.GradientRecords.end());
-	return s;
-}
-
-std::istream& lightspark::operator>>(std::istream& s, FOCALGRADIENT& v)
-{
-	BitStream bs(s);
-	v.SpreadMode=UB(2,bs);
-	v.InterpolationMode=UB(2,bs);
-	v.NumGradient=UB(4,bs);
-	GRADRECORD gr(v.version);
-	for(int i=0;i<v.NumGradient;i++)
-	{
-		s >> gr;
-		v.GradientRecords.push_back(gr);
-	}
-	sort(v.GradientRecords.begin(),v.GradientRecords.end());
-	//TODO: support FocalPoint
-	s.read((char*)&v.FocalPoint,2);
+	if (v.isFocal)
+		s >> v.FocalPoint;
 	return s;
 }
 
@@ -873,11 +927,10 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 	else if(v.FillStyleType==LINEAR_GRADIENT || v.FillStyleType==RADIAL_GRADIENT || v.FillStyleType==FOCAL_RADIAL_GRADIENT)
 	{
 		s >> v.Matrix;
-		v.FocalGradient.version=v.version;
-		if(v.FillStyleType==FOCAL_RADIAL_GRADIENT)
-			s >> v.FocalGradient;
-		else
-			s >> v.Gradient;
+		v.Gradient.version=v.version;
+		v.Gradient.isFocal=v.FillStyleType==FOCAL_RADIAL_GRADIENT;
+		s >> v.Gradient;
+		v.bitmap = _MNR(new BitmapContainer(nullptr)); // for caching the nanoVG gradient
 	}
 	else if(v.FillStyleType==REPEATING_BITMAP || v.FillStyleType==CLIPPED_BITMAP || v.FillStyleType==NON_SMOOTHED_REPEATING_BITMAP || 
 			v.FillStyleType==NON_SMOOTHED_CLIPPED_BITMAP)
@@ -889,7 +942,7 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		{
 			try
 			{
-				const DictionaryTag* dict=getParseThread()->getRootMovie()->dictionaryLookup(bitmapId);
+				const DictionaryTag* dict=getParseThread()->getRootMovie()->applicationDomain->dictionaryLookup(bitmapId);
 				const BitmapTag* b = dynamic_cast<const BitmapTag*>(dict);
 				if(!b)
 				{
@@ -967,23 +1020,25 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLE& v)
 	return s;
 }
 
-GLYPHENTRY::GLYPHENTRY(TEXTRECORD* p,BitStream& bs):parent(p)
+GLYPHENTRY::GLYPHENTRY(TEXTRECORD* p,BitStream& bs)
 {
-	GlyphIndex = UB(parent->parent->GlyphBits,bs);
-	GlyphAdvance = SB(parent->parent->AdvanceBits,bs);
+	GlyphIndex = UB(p->parent->GlyphBits,bs);
+	GlyphAdvance = SB(p->parent->AdvanceBits,bs);
 }
 
-SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDeltaX(0),MoveDeltaY(0),FillStyle1(0),FillStyle0(0),LineStyle(0),NumBits(0),DeltaX(0),DeltaY(0),ControlDeltaX(0),ControlDeltaY(0),AnchorDeltaX(0),AnchorDeltaY(0),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),StateMoveTo(false),StraightFlag(false),GeneralLineFlag(false),VertLineFlag(false)
+SHAPERECORD::SHAPERECORD(SHAPE* parent,BitStream& bs):AnchorDeltaX(0),AnchorDeltaY(0),DeltaX(0),DeltaY(0),
+	TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),StateMoveTo(false),StraightFlag(false)
 {
 	TypeFlag = UB(1,bs);
 	if(TypeFlag)
 	{
 		StraightFlag=UB(1,bs);
-		NumBits=UB(4,bs);
+		uint32_t NumBits=UB(4,bs);
 		if(StraightFlag)
 		{
 
-			GeneralLineFlag=UB(1,bs);
+			bool GeneralLineFlag=UB(1,bs);
+			bool VertLineFlag=false;
 			if(!GeneralLineFlag)
 				VertLineFlag=UB(1,bs);
 
@@ -999,11 +1054,10 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDelta
 		else
 		{
 			
-			ControlDeltaX=SB(NumBits+2,bs);
-			ControlDeltaY=SB(NumBits+2,bs);
+			DeltaX=SB(NumBits+2,bs);
+			DeltaY=SB(NumBits+2,bs);
 			AnchorDeltaX=SB(NumBits+2,bs);
 			AnchorDeltaY=SB(NumBits+2,bs);
-			
 		}
 	}
 	else
@@ -1015,9 +1069,9 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDelta
 		StateMoveTo = UB(1,bs);
 		if(StateMoveTo)
 		{
-			MoveBits = UB(5,bs);
-			MoveDeltaX = SB(MoveBits,bs);
-			MoveDeltaY = SB(MoveBits,bs);
+			uint32_t MoveBits = UB(5,bs);
+			DeltaX = SB(MoveBits,bs);
+			DeltaY = SB(MoveBits,bs);
 		}
 		if(StateFillStyle0)
 		{
@@ -1042,7 +1096,7 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDelta
 			bs.f >> a;
 			if (!a.FillStyles.empty())
 			{
-				p->fillOffset=ps->FillStyles.FillStyles.size();
+				parent->fillOffset=ps->FillStyles.FillStyles.size();
 				ps->FillStyles.appendStyles(a);
 			}
 
@@ -1050,18 +1104,18 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDelta
 			bs.f >> b;
 			if (!b.LineStyles2.empty())
 			{
-				p->lineOffset=ps->LineStyles.LineStyles2.size();
+				parent->lineOffset=ps->LineStyles.LineStyles2.size();
 				ps->LineStyles.appendStyles(b);
 			}
 			parent->NumFillBits=UB(4,bs);
 			parent->NumLineBits=UB(4,bs);
 		}
 		if(StateFillStyle0 && (FillStyle0 != 0))
-			FillStyle0+=p->fillOffset;
+			FillStyle0+=parent->fillOffset;
 		if(StateFillStyle1 && (FillStyle1 != 0))
-			FillStyle1+=p->fillOffset;
+			FillStyle1+=parent->fillOffset;
 		if(StateLineStyle && (LineStyle != 0))
-			LineStyle+=p->lineOffset;
+			LineStyle+=parent->lineOffset;
 	}
 }
 
@@ -1075,67 +1129,70 @@ void CXFORMWITHALPHA::getParameters(number_t& redMultiplier,
 				    number_t& alphaOffset) const
 {
 	// multipliers are stored as values from 0.0 to 1.0
-	if (HasMultTerms)
-	{
-		redMultiplier = RedMultTerm/256.0;
-		greenMultiplier = GreenMultTerm/256.0;
-		blueMultiplier = BlueMultTerm/256.0;
-		alphaMultiplier = AlphaMultTerm/256.0;
-		
-	}
-	else
-	{
-		redMultiplier = 1.0;
-		greenMultiplier = 1.0;
-		blueMultiplier = 1.0;
-		alphaMultiplier = 1.0;
-	}
+	redMultiplier = RedMultTerm/256.0;
+	greenMultiplier = GreenMultTerm/256.0;
+	blueMultiplier = BlueMultTerm/256.0;
+	alphaMultiplier = AlphaMultTerm/256.0;
 
-	if (HasAddTerms)
-	{
-		redOffset = RedAddTerm;
-		greenOffset = GreenAddTerm;
-		blueOffset = BlueAddTerm;
-		alphaOffset = AlphaAddTerm;
-	}
-	else
-	{
-		redOffset = 0;
-		greenOffset = 0;
-		blueOffset = 0;
-		alphaOffset = 0;
-	}
+	redOffset = RedAddTerm;
+	greenOffset = GreenAddTerm;
+	blueOffset = BlueAddTerm;
+	alphaOffset = AlphaAddTerm;
 }
 
 float CXFORMWITHALPHA::transformedAlpha(float alpha) const
 {
 	float ret = alpha;
-	if (HasMultTerms)
-		ret = alpha*AlphaMultTerm/256.;
-	if (HasAddTerms)
-		ret = alpha + AlphaAddTerm/256.;
+	ret = alpha*AlphaMultTerm/256.;
+	ret = alpha + AlphaAddTerm/256.;
 	return dmin(dmax(ret, 0.), 1.);
+}
+
+bool CXFORMWITHALPHA::isIdentity() const
+{
+	return (RedMultTerm==256 &&
+			GreenMultTerm==256 &&
+			BlueMultTerm==256 &&
+			AlphaMultTerm==256 &&
+			RedAddTerm==0 &&
+			GreenAddTerm==0 &&
+			BlueAddTerm==0 &&
+			AlphaAddTerm==0);
 }
 
 std::istream& lightspark::operator>>(std::istream& stream, CXFORMWITHALPHA& v)
 {
 	BitStream bs(stream);
-	v.HasAddTerms=UB(1,bs);
-	v.HasMultTerms=UB(1,bs);
-	v.NBits=UB(4,bs);
-	if(v.HasMultTerms)
+	bool HasAddTerms=UB(1,bs);
+	bool HasMultTerms=UB(1,bs);
+	uint8_t NBits=UB(4,bs);
+	if(HasMultTerms)
 	{
-		v.RedMultTerm=SB(v.NBits,bs);
-		v.GreenMultTerm=SB(v.NBits,bs);
-		v.BlueMultTerm=SB(v.NBits,bs);
-		v.AlphaMultTerm=SB(v.NBits,bs);
+		v.RedMultTerm=SB(NBits,bs);
+		v.GreenMultTerm=SB(NBits,bs);
+		v.BlueMultTerm=SB(NBits,bs);
+		v.AlphaMultTerm=SB(NBits,bs);
 	}
-	if(v.HasAddTerms)
+	else
 	{
-		v.RedAddTerm=SB(v.NBits,bs);
-		v.GreenAddTerm=SB(v.NBits,bs);
-		v.BlueAddTerm=SB(v.NBits,bs);
-		v.AlphaAddTerm=SB(v.NBits,bs);
+		v.RedMultTerm = 256;
+		v.GreenMultTerm = 256;
+		v.BlueMultTerm = 256;
+		v.AlphaMultTerm = 256;
+	}
+	if(HasAddTerms)
+	{
+		v.RedAddTerm=SB(NBits,bs);
+		v.GreenAddTerm=SB(NBits,bs);
+		v.BlueAddTerm=SB(NBits,bs);
+		v.AlphaAddTerm=SB(NBits,bs);
+	}
+	else
+	{
+		v.RedAddTerm=0;
+		v.GreenAddTerm=0;
+		v.BlueAddTerm=0;
+		v.AlphaAddTerm=0;
 	}
 	return stream;
 }
@@ -1206,13 +1263,14 @@ std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, FILTERLIST& v)
 {
-	UI8 NumberOfFilters;
-	stream >> NumberOfFilters;
-	v.Filters.resize(NumberOfFilters);
-
-	for(int i=0;i<NumberOfFilters;i++)
-		stream >> v.Filters[i];
 	
+	stream >> v.NumberOfFilters;
+	if (v.NumberOfFilters)
+	{
+		v.Filters = new FILTER[v.NumberOfFilters];
+		for(uint8_t i=0;i<v.NumberOfFilters;i++)
+			stream >> v.Filters[i];
+	}
 	return stream;
 }
 
@@ -1221,32 +1279,32 @@ std::istream& lightspark::operator>>(std::istream& stream, FILTER& v)
 	stream >> v.FilterID;
 	switch(v.FilterID)
 	{
-		case 0:
+		case FILTER::FILTER_DROPSHADOW:
 			stream >> v.DropShadowFilter;
 			break;
-		case 1:
+		case FILTER::FILTER_BLUR:
 			stream >> v.BlurFilter;
 			break;
-		case 2:
+		case FILTER::FILTER_GLOW:
 			stream >> v.GlowFilter;
 			break;
-		case 3:
+		case FILTER::FILTER_BEVEL: 
 			stream >> v.BevelFilter;
 			break;
-		case 4:
+		case FILTER::FILTER_GRADIENTGLOW:
 			stream >> v.GradientGlowFilter;
 			break;
-		case 5:
+		case FILTER::FILTER_CONVOLUTION:
 			stream >> v.ConvolutionFilter;
 			break;
-		case 6:
+		case FILTER::FILTER_COLORMATRIX:
 			stream >> v.ColorMatrixFilter;
 			break;
-		case 7:
+		case FILTER::FILTER_GRADIENTBEVEL:
 			stream >> v.GradientBevelFilter;
 			break;
 		default:
-			LOG(LOG_ERROR,"Unsupported Filter Id " << (int)v.FilterID);
+			LOG(LOG_ERROR,"Unsupported Filter Id " << (int)v.FilterID<<" "<<stream.tellg());
 			throw ParseException("Unsupported Filter Id");
 	}
 	return stream;
@@ -1297,8 +1355,9 @@ std::istream& lightspark::operator>>(std::istream& stream, BLURFILTER& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, BEVELFILTER& v)
 {
+	// contrary to spec HighlightColor is first entry, then ShadowColor
+	stream >> v.HighlightColor; 
 	stream >> v.ShadowColor;
-	stream >> v.HighlightColor;
 	stream >> v.BlurX;
 	stream >> v.BlurY;
 	stream >> v.Angle;
@@ -1316,19 +1375,19 @@ std::istream& lightspark::operator>>(std::istream& stream, BEVELFILTER& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, GRADIENTGLOWFILTER& v)
 {
-	UI8 NumColors;
-	stream >> NumColors;
-	for(int i = 0; i < NumColors; i++)
+	stream >> v.NumColors;
+	if (v.NumColors)
 	{
-		RGBA color;
-		stream >> color;
-		v.GradientColors.push_back(color);
+		v.GradientColors = new RGBA[v.NumColors];
+		v.GradientRatio = new UI8[v.NumColors];
 	}
-	for(int i = 0; i < NumColors; i++)
+	for(int i = 0; i < v.NumColors; i++)
 	{
-		UI8 ratio;
-		stream >> ratio;
-		v.GradientRatio.push_back(ratio);
+		stream >> v.GradientColors[i];
+	}
+	for(int i = 0; i < v.NumColors; i++)
+	{
+		stream >> v.GradientRatio[i];
 	}
 	stream >> v.BlurX;
 	stream >> v.BlurY;
@@ -1351,11 +1410,13 @@ std::istream& lightspark::operator>>(std::istream& stream, CONVOLUTIONFILTER& v)
 	stream >> v.MatrixY;
 	stream >> v.Divisor;
 	stream >> v.Bias;
+	if (v.MatrixX * v.MatrixY > 0)
+	{
+		v.Matrix = new FLOAT[v.MatrixX * v.MatrixY];
+	}
 	for(int i = 0; i < v.MatrixX * v.MatrixY; i++)
 	{
-		FLOAT f;
-		stream >> f;
-		v.Matrix.push_back(f);
+		stream >> v.Matrix[i];
 	}
 	stream >> v.DefaultColor;
 	BitStream bs(stream);
@@ -1376,19 +1437,19 @@ std::istream& lightspark::operator>>(std::istream& stream, COLORMATRIXFILTER& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, GRADIENTBEVELFILTER& v)
 {
-	UI8 NumColors;
-	stream >> NumColors;
-	for(int i = 0; i < NumColors; i++)
+	stream >> v.NumColors;
+	if (v.NumColors)
 	{
-		RGBA color;
-		stream >> color;
-		v.GradientColors.push_back(color);
+		v.GradientColors = new RGBA[v.NumColors];
+		v.GradientRatio = new UI8[v.NumColors];
 	}
-	for(int i = 0; i < NumColors; i++)
+	for(int i = 0; i < v.NumColors; i++)
 	{
-		UI8 ratio;
-		stream >> ratio;
-		v.GradientRatio.push_back(ratio);
+		stream >> v.GradientColors[i];
+	}
+	for(int i = 0; i < v.NumColors; i++)
+	{
+		stream >> v.GradientRatio[i];
 	}
 	stream >> v.BlurX;
 	stream >> v.BlurY;
@@ -1444,8 +1505,6 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPEVENTFLAGS& v)
 		LOG(LOG_NOT_IMPLEMENTED,"CLIPEVENTFLAG ClipEventDragOver not handled");
 	if (v.ClipEventData)
 		LOG(LOG_NOT_IMPLEMENTED,"CLIPEVENTFLAG ClipEventData not handled");
-	if (v.ClipEventKeyPress)
-		LOG(LOG_NOT_IMPLEMENTED,"CLIPEVENTFLAG ClipEventKeyPress not handled");
 	if (v.ClipEventDragOut)
 		LOG(LOG_NOT_IMPLEMENTED,"CLIPEVENTFLAG ClipEventDragOut not handled");
 	return s;
@@ -1477,6 +1536,7 @@ bool CLIPEVENTFLAGS::isNull()
 
 std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONRECORD& v)
 {
+	uint32_t startpos=s.tellg();
 	s >> v.EventFlags;
 	if(v.EventFlags.isNull())
 		return s;
@@ -1489,7 +1549,7 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONRECORD& v)
 	}
 	if (v.datatag)
 	{
-		v.startactionpos=v.datatag->numbytes+v.dataskipbytes;
+		v.startactionpos=v.datatag->numbytes+v.dataskipbytes+(uint32_t(s.tellg())-startpos);
 		v.actions.resize(len+v.startactionpos);
 		memcpy(v.actions.data(),v.datatag->bytes,v.datatag->numbytes);
 	}
@@ -1512,8 +1572,6 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONS& v)
 	while(1)
 	{
 		CLIPACTIONRECORD t(v.AllEventFlags.getSWFVersion(),v.dataskipbytes+(uint32_t(s.tellg())-startpos),v.datatag);
-		// use datatag only on first clipaction
-		v.datatag=nullptr;
 		s >> t;
 		if(t.isLast())
 			break;
@@ -1538,10 +1596,10 @@ ASObject* lightspark::abstract_s(ASWorker* wrk, const char* s, uint32_t len)
 	ret->datafilled=true;
 	return ret;
 }
-ASObject* lightspark::abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull)
+ASObject* lightspark::abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull,bool isInteger)
 {
 	ASString* ret= Class<ASString>::getInstanceSNoArgs(wrk);
-	ret->data.setValue(s,numbytes,numchars,issinglebyte,hasNull,true);
+	ret->data.setValue(s,numbytes,numchars,issinglebyte,hasNull,isInteger,true);
 	ret->stringId = UINT32_MAX;
 	ret->hasId = false;
 	ret->datafilled=true;
@@ -1643,39 +1701,61 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 		name = tmp.substr_bytes(collon_offset+2,tmp.numBytes()-collon_offset-2);
 		return;
 	}
-	// No namespace, look for a package name
-	char* dot = tmp.strchrr('.');
-	if(dot)
+	if (tmp.startsWith("Vector."))
 	{
-		uint32_t dot_offset = dot-tmp.raw_buf();
-		ns = tmp.substr_bytes(0,dot_offset);
-		name = tmp.substr_bytes(dot_offset+1,tmp.numBytes()-dot_offset-1);
+		// name is a Vector template name, add missing ns
+		ns="__AS3__.vec";
+		name=tmp;
 		return;
+	}
+	else
+	{
+		// No namespace, look for a package name
+		char* dot = tmp.strchrr('.');
+		if(dot)
+		{
+			uint32_t dot_offset = dot-tmp.raw_buf();
+			ns = tmp.substr_bytes(0,dot_offset);
+			name = tmp.substr_bytes(dot_offset+1,tmp.numBytes()-dot_offset-1);
+			return;
+		}
 	}
 	//No namespace or package in the string
 	name=tmp;
 	ns="";
 }
 
-RunState::RunState():last_FP(-1),FP(0),next_FP(0),stop_FP(false),explicit_FP(false),explicit_play(false),creatingframe(false),frameadvanced(false)
+RunState::RunState():last_FP(-1),FP(0),next_FP(0),stop_FP(false),explicit_FP(false),inEnterFrame(false),gotoQueued(false),creatingframe(false),frameadvanced(false)
 {
 }
 
-tiny_string QName::getQualifiedName(SystemState *sys,bool forDescribeType) const
+tiny_string QName::getQualifiedName(SystemState *sys,bool fullName) const
 {
 	tiny_string ret;
-	if(nsStringId != BUILTIN_STRINGS::EMPTY)
+	if (nsStringId == BUILTIN_STRINGS::STRING_AS3VECTOR)
 	{
-		ret+=sys->getStringFromUniqueId(nsStringId);
-		ret+="::";
+		ret = fullName ? "__AS3__.vec::" : "" ;
+		tiny_string t = sys->getStringFromUniqueId(nameId);
+		uint32_t nsub = t.rfind("$");
+		if (nsub != tiny_string::npos)
+		{
+			uint32_t ns = sys->getUniqueStringId(t.substr_bytes(0,nsub));
+			t = t.substr(nsub+1,t.numChars());
+			QName qn(sys->getUniqueStringId(t),ns);
+			t = qn.getQualifiedName(sys,true);
+		}
+		if (t=="Vector.<any>")
+			t = "Vector.<*>";
+		ret += t;
 	}
-	ret+=sys->getStringFromUniqueId(nameId);
-	if (forDescribeType && ret.startsWith("__AS3__.vec::Vector$"))
+	else
 	{
-		tiny_string ret2 = "__AS3__.vec::Vector.<";
-		ret2 += ret.substr(strlen("__AS3__.vec::Vector$"),ret.numChars());
-		ret2 += ">";
-		return ret2;
+		if(fullName && nsStringId != BUILTIN_STRINGS::EMPTY)
+		{
+			ret+=sys->getStringFromUniqueId(nsStringId);
+			ret+=fullName ? "::" : ".";
+		}
+		ret+=sys->getStringFromUniqueId(nameId);
 	}
 	return ret;
 }
@@ -1690,12 +1770,12 @@ QName::operator multiname() const
 	return ret;
 }
 
-FILLSTYLE::FILLSTYLE(uint8_t v):Gradient(v),version(v)
+FILLSTYLE::FILLSTYLE(uint8_t v):Gradient(v,false),FillStyleType(SOLID_FILL),version(v)
 {
 }
 
-FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):Matrix(r.Matrix),Gradient(r.Gradient),FocalGradient(r.FocalGradient),
-	bitmap(r.bitmap),ShapeBounds(r.ShapeBounds),Color(r.Color),FillStyleType(r.FillStyleType),version(r.version)
+FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):Matrix(r.Matrix),
+	Gradient(r.Gradient),bitmap(r.bitmap),ShapeBounds(r.ShapeBounds),Color(r.Color),FillStyleType(r.FillStyleType),version(r.version)
 {
 }
 
@@ -1703,17 +1783,36 @@ FILLSTYLE::~FILLSTYLE()
 {
 }
 
-FILLSTYLE& FILLSTYLE::operator=(FILLSTYLE r)
+FILLSTYLE& FILLSTYLE::operator=(const FILLSTYLE& r)
 {
 	Matrix = r.Matrix;
 	Gradient = r.Gradient;
-	FocalGradient = r.FocalGradient;
 	bitmap = r.bitmap;
 	ShapeBounds = r.ShapeBounds;
 	Color = r.Color;
 	FillStyleType = r.FillStyleType;
 	version = r.version;
 	return *this;
+}
+
+bool FILLSTYLE::operator==(const FILLSTYLE& r) const
+{
+	if (FillStyleType != r.FillStyleType ||
+		version != r.version ||
+		!(ShapeBounds == r.ShapeBounds))
+		return false;
+	switch (FillStyleType)
+	{
+		case SOLID_FILL:
+			return Color == r.Color;
+		case LINEAR_GRADIENT:
+		case RADIAL_GRADIENT:
+		case FOCAL_RADIAL_GRADIENT:
+			return Matrix == r.Matrix && Gradient == r.Gradient;
+		default:
+			return bitmap == r.bitmap;
+	}
+
 }
 
 LINESTYLE2::LINESTYLE2(const LINESTYLE2& r):StartCapStyle(r.StartCapStyle),JointStyle(r.JointStyle),HasFillFlag(r.HasFillFlag),
@@ -1727,7 +1826,7 @@ LINESTYLE2::~LINESTYLE2()
 {
 }
 
-LINESTYLE2& LINESTYLE2::operator=(LINESTYLE2 r)
+LINESTYLE2& LINESTYLE2::operator=(const LINESTYLE2& r)
 {
 	StartCapStyle=r.StartCapStyle;
 	JointStyle=r.JointStyle;
@@ -1743,6 +1842,22 @@ LINESTYLE2& LINESTYLE2::operator=(LINESTYLE2 r)
 	FillType=r.FillType;
 	version=r.version;
 	return *this;
+}
+bool LINESTYLE2::operator==(const LINESTYLE2& r) const
+{
+	return StartCapStyle==r.StartCapStyle
+			&& JointStyle==r.JointStyle
+			&& HasFillFlag==r.HasFillFlag
+			&& NoHScaleFlag==r.NoHScaleFlag
+			&& NoVScaleFlag==r.NoVScaleFlag
+			&& PixelHintingFlag==r.PixelHintingFlag
+			&& NoClose==r.NoClose
+			&& EndCapStyle==r.EndCapStyle
+			&& Width==r.Width
+			&& MiterLimitFactor==r.MiterLimitFactor
+			&& Color==r.Color
+			&& FillType==r.FillType
+			&& version==r.version;
 }
 
 nsNameAndKind::nsNameAndKind(SystemState* sys,const tiny_string& _name, NS_KIND _kind)
@@ -1768,19 +1883,19 @@ nsNameAndKind::nsNameAndKind(SystemState* sys,uint32_t _nameId, NS_KIND _kind)
 	nsNameId = _nameId;
 	kind = _kind;
 }
-nsNameAndKind::nsNameAndKind(SystemState* sys,uint32_t _nameId, NS_KIND _kind,RootMovieClip* root)
+nsNameAndKind::nsNameAndKind(SystemState* sys,uint32_t _nameId, NS_KIND _kind,ApplicationDomain* appDomain)
 {
 	assert(_kind==PROTECTED_NAMESPACE);
-	nsNameAndKindImpl tmp(_nameId, _kind,root);
+	nsNameAndKindImpl tmp(_nameId, _kind,appDomain);
 	sys->getUniqueNamespaceId(tmp, nsRealId, nsId);
 	nsNameId = _nameId;
 	kind = _kind;
 }
-nsNameAndKind::nsNameAndKind(SystemState* sys, uint32_t _nameId, uint32_t _baseId, NS_KIND _kind,RootMovieClip* root)
+nsNameAndKind::nsNameAndKind(SystemState* sys, uint32_t _nameId, uint32_t _baseId, NS_KIND _kind,ApplicationDomain* appDomain)
 {
 	assert(_kind==PROTECTED_NAMESPACE);
 	nsId=_baseId;
-	nsNameAndKindImpl tmp(_nameId, _kind, root, nsId);
+	nsNameAndKindImpl tmp(_nameId, _kind, appDomain, nsId);
 	uint32_t tmpId;
 	sys->getUniqueNamespaceId(tmp, nsRealId, tmpId);
 	assert(tmpId==_baseId);
@@ -1792,17 +1907,17 @@ nsNameAndKind::nsNameAndKind(ABCContext* c, uint32_t nsContextIndex)
 {
 	const namespace_info& ns=c->constant_pool.namespaces[nsContextIndex];
 	nsNameId=c->getString(ns.name);
-	nsNameAndKindImpl tmp(nsNameId, (NS_KIND)(int)ns.kind,((NS_KIND)(int)ns.kind)==PROTECTED_NAMESPACE ? c->root : nullptr);
+	nsNameAndKindImpl tmp(nsNameId, (NS_KIND)(int)ns.kind,((NS_KIND)(int)ns.kind)==PROTECTED_NAMESPACE ? c->applicationDomain : nullptr);
 	//Give an id hint, in case the namespace is created in the map
-	c->root->getSystemState()->getUniqueNamespaceId(tmp, c->namespaceBaseId+nsContextIndex, nsRealId, nsId);
+	c->applicationDomain->getSystemState()->getUniqueNamespaceId(tmp, c->namespaceBaseId+nsContextIndex, nsRealId, nsId);
 	//Special handling for private namespaces, they are always compared by id
 	if(ns.kind==PRIVATE_NAMESPACE)
 		nsId=c->namespaceBaseId+nsContextIndex;
 	kind = (NS_KIND)(int)ns.kind;
 }
 
-nsNameAndKindImpl::nsNameAndKindImpl(uint32_t _nameId, NS_KIND _kind, RootMovieClip *r, uint32_t b)
-  : nameId(_nameId),kind(_kind),baseId(b),root(r)
+nsNameAndKindImpl::nsNameAndKindImpl(uint32_t _nameId, NS_KIND _kind, ApplicationDomain* appDomain, uint32_t b)
+  : nameId(_nameId),kind(_kind),baseId(b),applicationDomain(appDomain)
 {
 	if (kind != NAMESPACE &&
 	    kind != PACKAGE_NAMESPACE &&
@@ -1852,20 +1967,27 @@ std::istream& lightspark::operator>>(std::istream& stream, SOUNDINFO& v)
 	UB(2,bs); // reserved
 	v.SyncStop = UB(1,bs);
 	v.SyncNoMultiple = UB(1,bs);
-	v.HasEnvelope = UB(1,bs);
-	v.HasLoops = UB(1,bs);
-	v.HasOutPoint = UB(1,bs);
-	v.HasInPoint = UB(1,bs);
-	if (v.HasInPoint)
+	bool HasEnvelope = UB(1,bs);
+	bool HasLoops = UB(1,bs);
+	bool HasOutPoint = UB(1,bs);
+	bool HasInPoint = UB(1,bs);
+	if (HasInPoint)
 		stream >> v.InPoint;
-	if (v.HasOutPoint)
+	else
+		v.InPoint=0;
+	if (HasOutPoint)
 		stream >> v.OutPoint;
-	if (v.HasLoops)
+	else
+		v.OutPoint=0;
+	if (HasLoops)
 		stream >> v.LoopCount;
-	if (v.HasEnvelope)
+	else
+		v.LoopCount=0;
+	if (HasEnvelope)
 	{
-		stream >> v.EnvPoints;
-		for (unsigned int i = 0; i < v.EnvPoints;i++)
+		UI8 EnvPoints;
+		stream >> EnvPoints;
+		for (unsigned int i = 0; i < EnvPoints;i++)
 		{
 			SOUNDENVELOPE env;
 			stream >> env.Pos44;
@@ -1897,8 +2019,67 @@ std::istream& lightspark::operator>>(std::istream& stream, BUTTONCONDACTION& v)
 
 SHAPE::~SHAPE()
 {
-	for (auto it = scaledtexturecache.begin(); it != scaledtexturecache.begin(); it++)
+}
+
+FILTER::FILTER(const FILTER& f):FilterID(f.FilterID)
+{
+	switch (FilterID)
 	{
-		delete (*it).second;
+		case FILTER_DROPSHADOW:
+			DropShadowFilter = f.DropShadowFilter;
+			break;
+		case FILTER_BLUR:
+			BlurFilter = f.BlurFilter;
+			break;
+		case FILTER_GLOW:
+			GlowFilter = f.GlowFilter;
+			break;
+		case FILTER_BEVEL:
+			BevelFilter = f.BevelFilter;
+			break;
+		case FILTER_GRADIENTGLOW:
+			GradientGlowFilter = f.GradientGlowFilter;
+			break;
+		case FILTER_CONVOLUTION:
+			ConvolutionFilter = f.ConvolutionFilter;
+			break;
+		case FILTER_COLORMATRIX:
+			ColorMatrixFilter = f.ColorMatrixFilter;
+			break;
+		case FILTER_GRADIENTBEVEL:
+			GradientBevelFilter = f.GradientBevelFilter;
+			break;
 	}
+}
+FILTER& FILTER::operator=(const FILTER& f)
+{
+	FilterID = f.FilterID;
+	switch (FilterID)
+	{
+		case FILTER_DROPSHADOW:
+			DropShadowFilter = f.DropShadowFilter;
+			break;
+		case FILTER_BLUR:
+			BlurFilter = f.BlurFilter;
+			break;
+		case FILTER_GLOW:
+			GlowFilter = f.GlowFilter;
+			break;
+		case FILTER_BEVEL:
+			BevelFilter = f.BevelFilter;
+			break;
+		case FILTER_GRADIENTGLOW:
+			GradientGlowFilter = f.GradientGlowFilter;
+			break;
+		case FILTER_CONVOLUTION:
+			ConvolutionFilter = f.ConvolutionFilter;
+			break;
+		case FILTER_COLORMATRIX:
+			ColorMatrixFilter = f.ColorMatrixFilter;
+			break;
+		case FILTER_GRADIENTBEVEL:
+			GradientBevelFilter = f.GradientBevelFilter;
+			break;
+	}
+	return *this;
 }

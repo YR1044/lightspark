@@ -17,8 +17,11 @@
 
 #include "ContextMenuItem.h"
 #include "ContextMenu.h"
-#include "scripting/class.h"
 #include "scripting/argconv.h"
+#include "scripting/flash/display/flashdisplay.h"
+#include "scripting/flash/display/RootMovieClip.h"
+#include "scripting/toplevel/AVM1Function.h"
+#include "scripting/toplevel/Undefined.h"
 
 using namespace std;
 using namespace lightspark;
@@ -26,11 +29,19 @@ using namespace lightspark;
 void ContextMenuItem::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, NativeMenuItem, _constructor, CLASS_SEALED | CLASS_FINAL);
-	c->setDeclaredMethodByQName("caption","",Class<IFunction>::getFunction(c->getSystemState(),NativeMenuItem::_getter_label),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("caption","",Class<IFunction>::getFunction(c->getSystemState(),NativeMenuItem::_setter_label),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("caption","",c->getSystemState()->getBuiltinFunction(NativeMenuItem::_getter_label),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("caption","",c->getSystemState()->getBuiltinFunction(NativeMenuItem::_setter_label),SETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,separatorBefore);
 	REGISTER_GETTER_SETTER(c,visible);
 	REGISTER_GETTER_SETTER(c,enabled);
+}
+
+ContextMenuItem::ContextMenuItem(ASWorker* wrk, Class_base* c):NativeMenuItem(wrk,c)
+{
+}
+
+ContextMenuItem::~ContextMenuItem()
+{
 }
 
 void ContextMenuItem::defaultEventBehavior(Ref<Event> e)
@@ -85,7 +96,7 @@ ASFUNCTIONBODY_GETTER_SETTER(ContextMenuItem,visible)
 ASFUNCTIONBODY_ATOM(ContextMenuItem,_constructor)
 {
 	ContextMenuItem* th=asAtomHandler::as<ContextMenuItem>(obj);
-	if (wrk->getSystemState()->mainClip->usesActionScript3)
+	if (wrk->getSystemState()->mainClip->needsActionScript3())
 	{
 		ARG_CHECK(ARG_UNPACK(th->label,"")(th->separatorBefore,false)(th->separatorBefore,false)(th->enabled,true)(th->visible,true));
 	}

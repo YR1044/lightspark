@@ -20,6 +20,7 @@
 #include <fstream>
 #include "logger.h"
 #include "threading.h"
+#include "swf.h"
 
 using namespace lightspark;
 
@@ -27,7 +28,8 @@ static Mutex logmutex;
 LOG_LEVEL Log::log_level=LOG_INFO;
 const char* Log::level_names[]={"ERROR", "INFO","NOT_IMPLEMENTED","CALLS","TRACE"};
 int Log::calls_indent = 0;
-
+asAtom logAtom = asAtomHandler::invalidAtom;
+std::ostream* logStream = &std::cerr;
 Log::Log(LOG_LEVEL l)
 {
 	if(l<=log_level)
@@ -46,7 +48,11 @@ Log::~Log()
 	if(valid)
 	{
 		Locker l(logmutex);
-		std::cerr << level_names[cur_level] << ": " << message.str();
+#ifndef NDEBUG
+		*logStream << level_names[cur_level] << ": " << asAtomHandler::toDebugString(logAtom)<<" " << message.str();
+#else
+		*logStream << level_names[cur_level] << ": " << message.str();
+#endif
 	}
 }
 
@@ -55,16 +61,27 @@ std::ostream& Log::operator()()
 	return message;
 }
 
-void Log::print(const std::string& s)
+void Logger::trace(const tiny_string& str)
 {
 	Locker l(logmutex);
-	std::cout << s << std::endl;
+	*outStream << str << std::endl;
+}
+
+void Logger::setStream(std::ostream* stream)
+{
+	Locker l(logmutex);
+	outStream = stream;
 }
 
 void Log::redirect(std::string filename)
 {
 	Locker l(logmutex);
 	static std::ofstream file(filename);
-	std::cout.rdbuf(file.rdbuf());
-	std::cerr.rdbuf(file.rdbuf());
+	logStream = &file;
+}
+
+void Log::setLogStream(std::ostream* stream)
+{
+	Locker l(logmutex);
+	logStream = stream;
 }

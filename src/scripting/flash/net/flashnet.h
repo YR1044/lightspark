@@ -20,37 +20,45 @@
 #ifndef SCRIPTING_FLASH_NET_FLASHNET_H
 #define SCRIPTING_FLASH_NET_FLASHNET_H 1
 
+#include "forwards/threading.h"
+#include "forwards/timer.h"
+#include "forwards/backends/netutils.h"
+#include "interfaces/threading.h"
+#include "interfaces/timer.h"
+#include "interfaces/backends/netutils.h"
 #include "compat.h"
 #include "asobject.h"
 #include "scripting/flash/events/flashevents.h"
-#include "thread_pool.h"
 #include "backends/netutils.h"
-#include "timer.h"
-#include "backends/decoder.h"
-#include "backends/audio.h"
+#include "backends/graphics.h"
 #include "NetStreamInfo.h"
 
 namespace lightspark
 {
+class VideoDecoder;
+class AudioDecoder;
+class AudioStream;
+class StreamDecoder;
 
 class URLRequest: public ASObject
 {
 private:
-	enum METHOD { GET=0, POST };
-	METHOD method;
+	tiny_string method;
 	tiny_string url;
-	_NR<ASObject> data;
+	asAtom data;
+	Array* requestHeaders;
 	tiny_string digest;
 	tiny_string validatedContentType() const;
 	tiny_string getContentTypeHeader() const;
 	void validateHeaderName(const tiny_string& headerName) const;
 	ASPROPERTY_GETTER_SETTER(tiny_string,contentType);
-	ASPROPERTY_GETTER_SETTER(_NR<Array>,requestHeaders);
+	ApplicationDomain* appDomain;
 public:
-	URLRequest(ASWorker* wrk,Class_base* c, const tiny_string u="", const tiny_string m="GET", _NR<ASObject> d = NullRef);
+	URLRequest(ASWorker* wrk,Class_base* c, const tiny_string u="", const tiny_string m="GET", const asAtom d = asAtomHandler::invalidAtom,ApplicationDomain* _appDomain=nullptr);
 	void finalize() override;
 	bool destruct() override;
 	void prepareShutdown() override;
+	bool countCylicMemberReferences(garbagecollectorstate& gcstate) override;
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(_getURL);
@@ -61,6 +69,8 @@ public:
 	ASFUNCTION_ATOM(_getData);
 	ASFUNCTION_ATOM(_getDigest);
 	ASFUNCTION_ATOM(_setDigest);
+	ASFUNCTION_ATOM(_getRequestHeaders);
+	ASFUNCTION_ATOM(_setRequestHeaders);
 	URLInfo getRequestURL() const;
 	std::list<tiny_string> getHeaders() const;
 	void getPostData(std::vector<uint8_t>& data) const;
@@ -79,10 +89,9 @@ private:
 	void decode(const tiny_string& s);
 	tiny_string toString_priv();
 public:
-	URLVariables(ASWorker* wrk,Class_base* c):ASObject(wrk,c){}
+	URLVariables(ASWorker* wrk,Class_base* c):ASObject(wrk,c,T_OBJECT,SUBTYPE_URLVARIABLES){}
 	URLVariables(ASWorker* wrk,Class_base* c,const tiny_string& s);
 	static void sinit(Class_base*);
-	static void buildTraits(ASObject* o);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(decode);
 	ASFUNCTION_ATOM(_toString);
@@ -244,7 +253,6 @@ public:
 	NetConnection(ASWorker* wrk,Class_base* c);
 	void finalize() override;
 	static void sinit(Class_base*);
-	static void buildTraits(ASObject* o);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(connect);
 	ASFUNCTION_ATOM(call);
@@ -394,7 +402,7 @@ public:
 		@pre lock on the object should be acquired and object should be ready
 		@return a TextureChunk ready to be blitted
 	*/
-	const TextureChunk& getTexture() const;
+	TextureChunk& getTexture() const;
 	/**
 	  	Get the stream time
 
@@ -432,22 +440,6 @@ public:
 	void clearFrameBuffer();
 };
 
-class LocalConnection: public EventDispatcher
-{
-public:
-	LocalConnection(ASWorker* wrk,Class_base* c);
-	static void sinit(Class_base*);
-	ASFUNCTION_ATOM(_constructor);
-	ASPROPERTY_GETTER(bool,isSupported);
-	ASFUNCTION_ATOM(allowDomain);
-	ASFUNCTION_ATOM(allowInsecureDomain);
-	ASFUNCTION_ATOM(send);
-	ASFUNCTION_ATOM(connect);
-	ASFUNCTION_ATOM(close);
-	ASFUNCTION_ATOM(domain);
-	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,client);
-};
-
 class NetGroup: public EventDispatcher
 {
 public:
@@ -463,6 +455,7 @@ public:
 	static void sinit(Class_base*);
 	ASFUNCTION_ATOM(_constructor);
 	ASPROPERTY_GETTER(number_t,size);
+	ASPROPERTY_GETTER(tiny_string,name);
 	
 };
 class FileFilter: public ASObject

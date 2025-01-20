@@ -18,7 +18,9 @@
 **************************************************************************/
 
 #include "scripting/abc.h"
+#include "scripting/toplevel/toplevel.h"
 #include "scripting/toplevel/ASString.h"
+#include "scripting/toplevel/Global.h"
 #include "scripting/toplevel/Vector.h"
 #include "scripting/class.h"
 #include "parsing/tags.h"
@@ -27,7 +29,19 @@ using namespace lightspark;
 
 ASObject* lightspark::new_asobject(ASWorker* wrk)
 {
-	return Class<ASObject>::getInstanceS(wrk);
+	Class_base* c=Class<ASObject>::getClass(wrk->getSystemState());
+	ASObject* ret = wrk->freelist_asobject.getObjectFromFreeList()->as<Activation_object>();
+	if (!ret)
+	{
+		ret=new (c->memoryAccount) ASObject(wrk,c);
+		ret->objfreelist = &wrk->freelist_asobject;
+		assert_and_throw(ret);
+	}
+	ret->resetCached();
+	ret->setIsInitialized();
+	ret->constructionComplete();
+	ret->setConstructIndicator();
+	return ret;
 }
 
 Prototype* lightspark::new_objectPrototype(ASWorker* wrk)
@@ -59,7 +73,17 @@ ObjectConstructor* lightspark::new_objectConstructor(Class_base* cls,uint32_t le
 Activation_object* lightspark::new_activationObject(ASWorker* wrk)
 {
 	Class_base* c=Class<ASObject>::getClass(wrk->getSystemState());
-	return new (c->memoryAccount) Activation_object(wrk,c);
+	Activation_object* ret = wrk->freelist_activationobject.getObjectFromFreeList()->as<Activation_object>();
+	if (!ret)
+	{
+		ret=new (c->memoryAccount) Activation_object(wrk,c);
+		assert_and_throw(ret);
+	}
+	ret->resetCached();
+	ret->setIsInitialized();
+	ret->constructionComplete();
+	ret->setConstructIndicator();
+	return ret;
 }
 
 
@@ -71,9 +95,23 @@ Class_inherit::Class_inherit(const QName& name, MemoryAccount* m, const traits_i
 	subtype = SUBTYPE_INHERIT;
 }
 
+bool Class_inherit::checkScriptInit()
+{
+	if (global)
+	{
+		if (inScriptInit)
+			return false;
+		inScriptInit=true;
+		global->checkScriptInit();
+		inScriptInit=false;
+	}
+	return true;
+}
+
 void Class_inherit::finalize()
 {
 	instancefactory.reset();
+	tag=nullptr;
 	auto it = class_scope.begin();
 	while (it != class_scope.end())
 	{
@@ -100,7 +138,6 @@ void Class_inherit::prepareShutdown()
 			o->prepareShutdown();
 		it++;
 	}
-	class_scope.clear();
 }
 
 void Class_inherit::getInstance(ASWorker* worker, asAtom& ret, bool construct, asAtom* args, const unsigned int argslen, Class_base* realClass)
@@ -138,7 +175,7 @@ void Class_inherit::getInstance(ASWorker* worker, asAtom& ret, bool construct, a
 		}
 	}
 	if(construct)
-		handleConstruction(ret,args,argslen,true);
+		handleConstruction(ret,args,argslen,true,worker->isExplicitlyConstructed());
 }
 void Class_inherit::recursiveBuild(ASObject* target) const
 {
@@ -164,9 +201,9 @@ void Class_inherit::setupDeclaredTraits(ASObject *target, bool checkclone)
 {
 	if (!target->traitsInitialized)
 	{
-	#ifndef NDEBUG
-		assert_and_throw(!target->initialized);
-	#endif
+#ifndef NDEBUG
+		assert(!target->initialized);
+#endif
 		bool cloneable = checkclone && !instancefactory.isNull();
 		if (cloneable)
 		{
@@ -199,10 +236,9 @@ void Class_inherit::setupDeclaredTraits(ASObject *target, bool checkclone)
 			//And restore it
 			target->implEnable=bak;
 		}
-
-	#ifndef NDEBUG
+#ifndef NDEBUG
 		target->initialized=true;
-	#endif
+#endif
 		target->traitsInitialized = true;
 	}
 }
@@ -237,6 +273,11 @@ variable* Class_inherit::findVariableByMultiname(const multiname& name, Class_ba
 {
 	checkScriptInit();
 	return Class_base::findVariableByMultiname(name, cls, nsRealID, isborrowed, considerdynamic, wrk);
+}
+multiname* Class_inherit::setVariableByMultiname(multiname& name, asAtom& o, CONST_ALLOWED_FLAG allowConst, bool* alreadyset, ASWorker* wrk)
+{
+	checkScriptInit();
+	return Class_base::setVariableByMultiname(name, o, allowConst, alreadyset, wrk);
 }
 string Class_inherit::toDebugString() const
 {
@@ -319,6 +360,67 @@ void lightspark::lookupAndLink(Class_base* c, uint32_t nameID, uint32_t interfac
 	}
 }
 
+void Class<ASObject>::AVM1generator(ASWorker* wrk, asAtom& ret, asAtom* args, const unsigned int argslen)
+{
+	bool canConvert =
+	(
+		argslen != 0 &&
+		asAtomHandler::isValid(args[0]) &&
+		!asAtomHandler::isNullOrUndefined(args[0])
+	);
+
+	if (!canConvert)
+	{
+		ret = asAtomHandler::fromObject(new_asobject(wrk));
+		return;
+	}
+
+	// NOTE: For a non null/undefined argument, AVM1's `Object`
+	// constructor converts the argument into an `Object`, rather than
+	// returning the argument itself.
+	ASObject* obj = nullptr;
+
+	switch (asAtomHandler::getObjectType(args[0]))
+	{
+		case T_BOOLEAN:
+			obj = abstract_b
+			(
+				getSystemState(),
+				args[0].uintval & 0x80
+			);
+			break;
+		case T_NUMBER:
+		{
+			auto num = asAtomHandler::toNumber(args[0]);
+			obj = abstract_d(wrk, num);
+			break;
+		}
+		case T_INTEGER:
+		case T_UINTEGER:
+		{
+			auto _int = asAtomHandler::toInt64(args[0]);
+			obj = abstract_di(wrk, _int);
+			break;
+		}
+		case T_STRING:
+		{
+			auto str = asAtomHandler::toString(args[0], wrk);
+			obj = abstract_s(wrk, str);
+			break;
+		}
+		default:
+			ASATOM_INCREF(args[0]);
+			if (asAtomHandler::isObject(args[0]))
+				obj = asAtomHandler::getObjectNoCheck(args[0]);
+			else
+				ret = args[0];
+			break;
+	}
+
+	if (obj != nullptr)
+		ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)obj | ATOM_OBJECTPTR;
+}
+
 void Class<ASObject>::getInstance(ASWorker* worker, asAtom& ret, bool construct, asAtom* args, const unsigned int argslen, Class_base* realClass)
 {
 	if (construct && args && argslen == 1 && this == Class<ASObject>::getClass(this->getSystemState()))
@@ -345,7 +447,7 @@ void Class<ASObject>::getInstance(ASWorker* worker, asAtom& ret, bool construct,
 		realClass=this;
 	ret=asAtomHandler::fromObjectNoPrimitive(new (realClass->memoryAccount) ASObject(worker,realClass));
 	if(construct)
-		handleConstruction(ret,args,argslen,true);
+		handleConstruction(ret,args,argslen,true,worker->isExplicitlyConstructed());
 }
 Class<ASObject>* Class<ASObject>::getClass(SystemState* sys)
 {

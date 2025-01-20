@@ -25,8 +25,24 @@
 #include "scripting/avm1/avm1text.h"
 #include "scripting/avm1/avm1ui.h"
 #include "scripting/avm1/avm1xml.h"
-#include "scripting/flash/filters/flashfilters.h"
+#include "scripting/avm1/avm1array.h"
+#include "scripting/avm1/avm1date.h"
+#include "scripting/avm1/avm1filter.h"
+#include "scripting/toplevel/Global.h"
+#include "scripting/flash/geom/flashgeom.h"
+#include "scripting/flash/geom/Rectangle.h"
+#include "scripting/flash/geom/Point.h"
+#include "scripting/flash/filters/BevelFilter.h"
+#include "scripting/flash/filters/BlurFilter.h"
+#include "scripting/flash/filters/ColorMatrixFilter.h"
+#include "scripting/flash/filters/ConvolutionFilter.h"
+#include "scripting/flash/filters/DisplacementMapFilter.h"
+#include "scripting/flash/filters/DropShadowFilter.h"
+#include "scripting/flash/filters/GlowFilter.h"
+#include "scripting/flash/filters/GradientBevelFilter.h"
+#include "scripting/flash/filters/GradientGlowFilter.h"
 #include "scripting/flash/ui/ContextMenu.h"
+#include "scripting/toplevel/toplevel.h"
 #include "scripting/abc.h"
 using namespace lightspark;
 
@@ -39,20 +55,22 @@ void ABCVm::registerClassesAVM1()
 
 	registerClassesToplevel(builtinavm1);
 
-	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),NORMAL_METHOD,true);
-	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),DYNAMIC_TRAIT);
-	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),NORMAL_METHOD,false);
-	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),DYNAMIC_TRAIT);
+	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("addProperty","",m_sys->getBuiltinFunction(ASObject::addProperty),NORMAL_METHOD,true);
+	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("addProperty","",m_sys->getBuiltinFunction(ASObject::addProperty),DYNAMIC_TRAIT);
+	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("registerClass","",m_sys->getBuiltinFunction(ASObject::registerClass),NORMAL_METHOD,false);
+	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("registerClass","",m_sys->getBuiltinFunction(ASObject::registerClass),DYNAMIC_TRAIT);
 
-	builtinavm1->registerBuiltin("ASSetPropFlags","",_MR(Class<IFunction>::getFunction(m_sys,AVM1_ASSetPropFlags)));
-	builtinavm1->registerBuiltin("setInterval","",_MR(Class<IFunction>::getFunction(m_sys,setInterval)));
-	builtinavm1->registerBuiltin("clearInterval","",_MR(Class<IFunction>::getFunction(m_sys,clearInterval)));
-	builtinavm1->registerBuiltin("setTimeout","",_MR(Class<IFunction>::getFunction(m_sys,setTimeout)));
-	builtinavm1->registerBuiltin("updateAfterEvent","",_MR(Class<IFunction>::getFunction(m_sys,AVM1_updateAfterEvent)));
+	builtinavm1->registerBuiltin("ASSetPropFlags","",_MR(m_sys->getBuiltinFunction(AVM1_ASSetPropFlags)));
+	builtinavm1->registerBuiltin("setInterval","",_MR(m_sys->getBuiltinFunction(setInterval)));
+	builtinavm1->registerBuiltin("clearInterval","",_MR(m_sys->getBuiltinFunction(clearInterval)));
+	builtinavm1->registerBuiltin("setTimeout","",_MR(m_sys->getBuiltinFunction(setTimeout)));
+	builtinavm1->registerBuiltin("updateAfterEvent","",_MR(m_sys->getBuiltinFunction(AVM1_updateAfterEvent)));
 
 	builtinavm1->registerBuiltin("object","",Class<ASObject>::getRef(m_sys));
-	builtinavm1->registerBuiltin("Button","",Class<SimpleButton>::getRef(m_sys));
+	builtinavm1->registerBuiltin("Button","",Class<AVM1SimpleButton>::getRef(m_sys));
+	builtinavm1->registerBuiltin("Array","",Class<AVM1Array>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Color","",Class<AVM1Color>::getRef(m_sys));
+	builtinavm1->registerBuiltin("Date","",Class<AVM1Date>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Mouse","",Class<AVM1Mouse>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Sound","",Class<AVM1Sound>::getRef(m_sys));
 	builtinavm1->registerBuiltin("MovieClip","",Class<AVM1MovieClip>::getRef(m_sys));
@@ -65,7 +83,7 @@ void ABCVm::registerClassesAVM1()
 	builtinavm1->registerBuiltin("TextField","",Class<AVM1TextField>::getRef(m_sys));
 	builtinavm1->registerBuiltin("TextFormat","",Class<AVM1TextFormat>::getRef(m_sys));
 	builtinavm1->registerBuiltin("XML","",Class<AVM1XMLDocument>::getRef(m_sys));
-	builtinavm1->registerBuiltin("XMLNode","",Class<XMLNode>::getRef(m_sys));
+	builtinavm1->registerBuiltin("XMLNode","",Class<AVM1XMLNode>::getRef(m_sys));
 	builtinavm1->registerBuiltin("XMLSocket","",Class<AVM1XMLSocket>::getRef(m_sys));
 
 	builtinavm1->registerBuiltin("NetConnection","",Class<AVM1NetConnection>::getRef(m_sys));
@@ -77,7 +95,7 @@ void ABCVm::registerClassesAVM1()
 
 	if (m_sys->getSwfVersion() >= 6)
 	{
-		ASObject* systempackage = Class<ASObject>::getInstanceS(m_sys->worker);
+		ASObject* systempackage = new_asobject(m_sys->worker);
 		builtinavm1->setVariableByQName("System",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),systempackage,CONSTANT_TRAIT);
 		
 		systempackage->setVariableByQName("security","System",Class<Security>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
@@ -85,18 +103,18 @@ void ABCVm::registerClassesAVM1()
 	}
 	if (m_sys->getSwfVersion() >= 8)
 	{
-		ASObject* flashpackage = Class<ASObject>::getInstanceS(m_sys->worker);
+		ASObject* flashpackage = new_asobject(m_sys->worker);
 		builtinavm1->setVariableByQName("flash",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),flashpackage,CONSTANT_TRAIT);
 
-		ASObject* flashdisplaypackage = Class<ASObject>::getInstanceS(m_sys->worker);
+		ASObject* flashdisplaypackage = new_asobject(m_sys->worker);
 		flashpackage->setVariableByQName("display",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),flashdisplaypackage,CONSTANT_TRAIT);
 
 		flashdisplaypackage->setVariableByQName("BitmapData","flash.display",Class<AVM1BitmapData>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 
-		ASObject* flashfilterspackage = Class<ASObject>::getInstanceS(m_sys->worker);
+		ASObject* flashfilterspackage = new_asobject(m_sys->worker);
 		flashpackage->setVariableByQName("filters",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),flashfilterspackage,CONSTANT_TRAIT);
 
-		flashfilterspackage->setVariableByQName("BitmapFilter","flash.filters",Class<BitmapFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
+		flashfilterspackage->setVariableByQName("BitmapFilter","flash.filters",Class<AVM1BitmapFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashfilterspackage->setVariableByQName("DropShadowFilter","flash.filters",Class<DropShadowFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashfilterspackage->setVariableByQName("GlowFilter","flash.filters",Class<GlowFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashfilterspackage->setVariableByQName("GradientGlowFilter","flash.filters",Class<GradientGlowFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
@@ -107,7 +125,7 @@ void ABCVm::registerClassesAVM1()
 		flashfilterspackage->setVariableByQName("DisplacementMapFilter","flash.filters",Class<DisplacementMapFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashfilterspackage->setVariableByQName("GradientBevelFilter","flash.filters",Class<GradientBevelFilter>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 
-		ASObject* flashgeompackage = Class<ASObject>::getInstanceS(m_sys->worker);
+		ASObject* flashgeompackage = new_asobject(m_sys->worker);
 		flashpackage->setVariableByQName("geom",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),flashgeompackage,CONSTANT_TRAIT);
 
 		flashgeompackage->setVariableByQName("Matrix","flash.geom",Class<Matrix>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);

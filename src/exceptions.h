@@ -46,6 +46,31 @@ public:
 	~LightsparkException() throw(){}
 };
 
+class ScriptLimitException: public LightsparkException
+{
+public:
+	enum Type
+	{
+		MaxFunctionRecursion,
+		MaxPrototypeRecursion,
+		ScriptTimeout,
+	};
+
+	ScriptLimitException(const std::string& c, const Type& _type) :
+	LightsparkException(c),
+	type(_type) {}
+
+	const char* what() const throw()
+	{
+		return cause.length() ? cause.c_str() : "Lightspark error";
+	}
+
+	Type getType() const { return type; }
+
+private:
+	Type type;
+};
+
 class RunTimeException: public LightsparkException
 {
 public:

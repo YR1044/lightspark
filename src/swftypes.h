@@ -28,12 +28,16 @@
 #include <list>
 #include <cairo.h>
 
+#include "forwards/swftypes.h"
+#include "forwards/scripting/flash/display/DisplayObject.h"
+#include "forwards/scripting/flash/display/flashdisplay.h"
+#include "forwards/scripting/flash/system/flashsystem.h"
+#include "forwards/tiny_string.h"
 #include "logger.h"
 #include <cstdlib>
 #include <cassert>
 #include "exceptions.h"
 #include "smartrefs.h"
-#include "tiny_string.h"
 #include "memory_support.h"
 
 #ifdef BIG_ENDIAN
@@ -48,6 +52,8 @@ enum BUILTIN_STRINGS { EMPTY=0, STRING_WILDCARD='*', ANY=BUILTIN_STRINGS_CHAR_MA
 					   ,STRING_OBJECT,STRING_UNDEFINED,STRING_BOOLEAN,STRING_NUMBER,STRING_STRING,STRING_FUNCTION_LOWERCASE,STRING_ONROLLOVER,STRING_ONROLLOUT
 					   ,STRING_PROTO,STRING_TARGET,STRING_FLASH_EVENTS_IEVENTDISPATCHER,STRING_ADDEVENTLISTENER,STRING_REMOVEEVENTLISTENER,STRING_DISPATCHEVENT,STRING_HASEVENTLISTENER
 					   ,STRING_ONCONNECT,STRING_ONDATA,STRING_ONCLOSE,STRING_ONSELECT
+					   ,STRING_ADD,STRING_ALPHA,STRING_DARKEN,STRING_DIFFERENCE,STRING_ERASE,STRING_HARDLIGHT,STRING_INVERT,STRING_LAYER,STRING_LIGHTEN,STRING_MULTIPLY,STRING_OVERLAY,STRING_SCREEN,STRING_SUBTRACT
+					   ,STRING_TEXT,STRING_NULL,STRING_TRUE,STRING_FALSE
 					   ,LAST_BUILTIN_STRING };
 enum BUILTIN_NAMESPACES { EMPTY_NS=0, AS3_NS };
 
@@ -67,7 +73,12 @@ enum CLASS_SUBTYPE { SUBTYPE_NOT_SET, SUBTYPE_PROXY, SUBTYPE_REGEXP, SUBTYPE_XML
 					 ,SUBTYPE_BITMAPFILTER,SUBTYPE_GLOWFILTER,SUBTYPE_DROPSHADOWFILTER,SUBTYPE_GRADIENTGLOWFILTER,SUBTYPE_BEVELFILTER,SUBTYPE_COLORMATRIXFILTER,SUBTYPE_BLURFILTER,SUBTYPE_CONVOLUTIONFILTER,SUBTYPE_DISPLACEMENTFILTER,SUBTYPE_GRADIENTBEVELFILTER,SUBTYPE_SHADERFILTER
 					 ,SUBTYPE_THROTTLE_EVENT,SUBTYPE_CONTEXTMENUEVENT,SUBTYPE_GAMEINPUTEVENT, SUBTYPE_GAMEINPUTDEVICE, SUBTYPE_VIDEO, SUBTYPE_MESSAGECHANNEL, SUBTYPE_CONDITION
 					 ,SUBTYPE_FILE, SUBTYPE_FILEMODE, SUBTYPE_FILESTREAM, SUBTYPE_FILEREFERENCE, SUBTYPE_DATAGRAMSOCKET, SUBTYPE_NATIVEWINDOW,SUBTYPE_EXTENSIONCONTEXT,SUBTYPE_SIMPLEBUTTON,SUBTYPE_SHAPE,SUBTYPE_MORPHSHAPE
-					 ,SUBTYPE_URLLOADER,SUBTYPE_URLREQUEST,SUBTYPE_DICTIONARY,SUBTYPE_TEXTLINEMETRICS
+					 ,SUBTYPE_URLLOADER,SUBTYPE_URLREQUEST,SUBTYPE_DICTIONARY,SUBTYPE_TEXTLINEMETRICS,SUBTYPE_XMLNODE,SUBTYPE_XMLDOCUMENT,SUBTYPE_LOADER
+					 ,SUBTYPE_TEXTJUSTIFIER,SUBTYPE_SPACEJUSTIFIER,SUBTYPE_EASTASIANJUSTIFIER
+					 ,SUBTYPE_ERROR,SUBTYPE_SECURITYERROR,SUBTYPE_ARGUMENTERROR,SUBTYPE_DEFINITIONERROR,SUBTYPE_EVALERROR,SUBTYPE_RANGEERROR,SUBTYPE_REFERENCEERROR,SUBTYPE_SYNTAXERROR,SUBTYPE_TYPEERROR,SUBTYPE_URIERROR,SUBTYPE_VERIFYERROR,SUBTYPE_UNINITIALIZEDERROR
+					 ,SUBTYPE_AVM1SOUND,SUBTYPE_LOCALCONNECTION,SUBTYPE_NATIVEWINDOWBOUNDSEVENT,SUBTYPE_AVM1MOVIECLIP,SUBTYPE_AVM1MOVIECLIPLOADER
+					 ,SUBTYPE_GRAPHICSENDFILL,SUBTYPE_GRAPHICSSOLIDFILL,SUBTYPE_GRAPHICSPATH,SUBTYPE_AVM1MOVIE,SUBTYPE_URLVARIABLES
+					 ,SUBTYPE_AVM1XMLDOCUMENT,SUBTYPE_AVM1XMLNODE
 				   };
  
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
@@ -75,12 +86,28 @@ enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STAC
 enum AS_BLENDMODE { BLENDMODE_NORMAL=0, BLENDMODE_LAYER=2, BLENDMODE_MULTIPLY=3,BLENDMODE_SCREEN=4,BLENDMODE_LIGHTEN=5,BLENDMODE_DARKEN=6, BLENDMODE_DIFFERENCE=7,
 					BLENDMODE_ADD=8, BLENDMODE_SUBTRACT=9,BLENDMODE_INVERT=10,BLENDMODE_ALPHA=11,BLENDMODE_ERASE=12,BLENDMODE_OVERLAY=13,BLENDMODE_HARDLIGHT=14
 				  };
+enum SMOOTH_MODE { SMOOTH_NONE=0, SMOOTH_SUBPIXEL=1, SMOOTH_ANTIALIAS=2 };
 
+enum HIT_TYPE { GENERIC_HIT, // point is over the object
+				GENERIC_HIT_INVISIBLE, // ...even if the object is invisible
+				MOUSE_CLICK_HIT, // point over the object and mouseEnabled
+				DOUBLE_CLICK_HIT // point over the object and doubleClickEnabled
+};
 enum LS_VIDEO_CODEC { H264=0, H263, VP6, VP6A, GIF };
 // "Audio coding formats" from Chapter 11 in SWF documentation (except for LINEAR_PCM_FLOAT_PLATFORM_ENDIAN)
-enum LS_AUDIO_CODEC { CODEC_NONE=-1, LINEAR_PCM_PLATFORM_ENDIAN=0, ADPCM=1, MP3=2, LINEAR_PCM_LE=3, AAC=10, LINEAR_PCM_FLOAT_PLATFORM_ENDIAN = 100 };
+enum LS_AUDIO_CODEC { CODEC_NONE=-1, LINEAR_PCM_PLATFORM_ENDIAN=0, ADPCM=1, MP3=2, LINEAR_PCM_LE=3, NELLYMOSER16=4, NELLYMOSER8=5, NELLYMOSER=6, AAC=10, SPEEX=11, LINEAR_PCM_FLOAT_PLATFORM_ENDIAN = 100 };
 
 enum OBJECT_ENCODING { AMF0=0, AMF3=3, DEFAULT=3 };
+
+enum DEPTHSTENCIL_FUNCTION { DEPTHSTENCIL_ALWAYS, DEPTHSTENCIL_EQUAL, DEPTHSTENCIL_GREATER, DEPTHSTENCIL_GREATER_EQUAL, DEPTHSTENCIL_LESS, DEPTHSTENCIL_LESS_EQUAL, DEPTHSTENCIL_NEVER, DEPTHSTENCIL_NOT_EQUAL };
+enum DEPTHSTENCIL_OP { DEPTHSTENCIL_KEEP, DEPTHSTENCIL_ZERO, DEPTHSTENCIL_REPLACE, DEPTHSTENCIL_INCR, DEPTHSTENCIL_INCR_WRAP, DEPTHSTENCIL_DECR, DEPTHSTENCIL_DECR_WRAP, DEPTHSTENCIL_INVERT };
+enum TRIANGLE_FACE { FACE_BACK, FACE_FRONT, FACE_FRONT_AND_BACK, FACE_NONE };
+enum BLEND_FACTOR { BLEND_ONE,BLEND_ZERO,BLEND_SRC_ALPHA,BLEND_SRC_COLOR,BLEND_DST_ALPHA,BLEND_DST_COLOR,BLEND_ONE_MINUS_SRC_ALPHA,BLEND_ONE_MINUS_SRC_COLOR,BLEND_ONE_MINUS_DST_ALPHA,BLEND_ONE_MINUS_DST_COLOR };
+enum VERTEXBUFFER_FORMAT { BYTES_4=0, FLOAT_1, FLOAT_2, FLOAT_3, FLOAT_4 };
+enum CLEARMASK { COLOR = 0x1, DEPTH = 0x2, STENCIL = 0x4 };
+enum TEXTUREFORMAT { BGRA, BGRA_PACKED, BGR_PACKED, COMPRESSED, COMPRESSED_ALPHA, RGBA_HALF_FLOAT,BGR };
+enum TEXTUREFORMAT_COMPRESSED { UNCOMPRESSED, DXT5, DXT1 };
+enum SAMPLEPOSITION { SAMPLEPOS_STANDARD=0,SAMPLEPOS_BLEND=1,SAMPLEPOS_FILTER=2,SAMPLEPOS_FILTER_DST=3 };
 
 // Enum used during early binding in abc_optimizer.cpp
 enum EARLY_BIND_STATUS { NOT_BINDED=0, CANNOT_BIND=1, BINDED };
@@ -125,12 +152,8 @@ class ASObject;
 class ASString;
 class ABCContext;
 class URLInfo;
-class DisplayObject;
-class MovieClip;
-class Frame;
 class AVM1Function;
 class AVM1context;
-class ASWorker;
 struct namespace_info;
 
 struct multiname;
@@ -151,7 +174,7 @@ public:
 	{
 		return nameId==r.nameId && nsStringId==r.nsStringId;
 	}
-	tiny_string getQualifiedName(SystemState* sys, bool forDescribeType = false) const;
+	tiny_string getQualifiedName(SystemState* sys, bool fullName = false) const;
 	operator multiname() const;
 };
 
@@ -296,7 +319,7 @@ public:
 	STRING(const char* s, int len):String(s,len)
 	{
 	}
-	bool operator==(const STRING& s)
+	bool operator==(const STRING& s) const
 	{
 		if(String.size()!=s.String.size())
 			return false;
@@ -346,12 +369,12 @@ struct nsNameAndKindImpl
 	NS_KIND kind;
 	uint32_t baseId;
 	// this is null for all namespaces except kind PROTECTED_NAMESPACE, to ensure they are treated as different namespaces when declared in different swf files
-	RootMovieClip* root;
-	nsNameAndKindImpl(uint32_t _nameId, NS_KIND _kind, RootMovieClip* r=nullptr,uint32_t b=-1);
+	ApplicationDomain* applicationDomain;
+	nsNameAndKindImpl(uint32_t _nameId, NS_KIND _kind, ApplicationDomain* appDomain=nullptr,uint32_t b=-1);
 	bool operator<(const nsNameAndKindImpl& r) const
 	{
-		if(root != r.root)
-			return root<r.root;
+		if(applicationDomain != r.applicationDomain)
+			return applicationDomain<r.applicationDomain;
 		if(kind==r.kind)
 			return nameId < r.nameId;
 		else
@@ -359,8 +382,8 @@ struct nsNameAndKindImpl
 	}
 	bool operator>(const nsNameAndKindImpl& r) const
 	{
-		if(root != r.root)
-			return root>r.root;
+		if(applicationDomain != r.applicationDomain)
+			return applicationDomain>r.applicationDomain;
 		if(kind==r.kind)
 			return nameId > r.nameId;
 		else
@@ -378,13 +401,13 @@ struct nsNameAndKind
 	nsNameAndKind(SystemState *sys, const tiny_string& _name, NS_KIND _kind);
 	nsNameAndKind(SystemState* sys,const char* _name, NS_KIND _kind);
 	nsNameAndKind(SystemState* sys, uint32_t _nameId, NS_KIND _kind);
-	nsNameAndKind(SystemState* sys, uint32_t _nameId, NS_KIND _kind, RootMovieClip *root);
+	nsNameAndKind(SystemState* sys, uint32_t _nameId, NS_KIND _kind, ApplicationDomain* appDomain);
 	nsNameAndKind(ABCContext * c, uint32_t nsContextIndex);
 	/*
 	 * Special constructor for protected namespace, which have
 	 * different representationId
 	 */
-	nsNameAndKind(SystemState* sys, uint32_t _nameId, uint32_t _baseId, NS_KIND _kind, RootMovieClip *root);
+	nsNameAndKind(SystemState* sys, uint32_t _nameId, uint32_t _baseId, NS_KIND _kind, ApplicationDomain* appDomain);
 	/*
 	 * Special version to create the empty bultin namespace
 	 */
@@ -414,6 +437,30 @@ struct nsNameAndKind
 	}
 };
 
+#ifdef LIGHTSPARK_64
+union asAtom
+{
+	int64_t intval;
+	uint64_t uintval;
+	bool operator<(const asAtom& r) const
+	{
+		return uintval < r.uintval;
+	}
+};
+#define LIGHTSPARK_ATOM_VALTYPE uint64_t
+#else
+union asAtom
+{
+	int32_t intval;
+	uint32_t uintval;
+	bool operator<(const asAtom& r) const
+	{
+		return uintval < r.uintval;
+	}
+};
+#define LIGHTSPARK_ATOM_VALTYPE uint32_t
+#endif
+
 struct multiname: public memory_reporter
 {
 	uint32_t name_s_id;
@@ -422,10 +469,10 @@ struct multiname: public memory_reporter
 		int32_t name_i;
 		uint32_t name_ui;
 		number_t name_d;
-		ASObject* name_o;
+		asAtom name_o;
 	};
 	std::vector<nsNameAndKind, reporter_allocator<nsNameAndKind>> ns;
-	const Type* cachedType;
+	Type* cachedType;
 	std::vector<multiname*> templateinstancenames;
 	enum NAME_TYPE {NAME_STRING,NAME_INT,NAME_UINT,NAME_NUMBER,NAME_OBJECT};
 	NAME_TYPE name_type:3;
@@ -435,18 +482,19 @@ struct multiname: public memory_reporter
 	bool hasBuiltinNS:1;
 	bool hasGlobalNS:1;
 	bool isInteger:1;
-	multiname(MemoryAccount* m):name_s_id(UINT32_MAX),name_o(nullptr),ns(reporter_allocator<nsNameAndKind>(m)),cachedType(nullptr),name_type(NAME_OBJECT),isAttribute(false),isStatic(true),hasEmptyNS(true),hasBuiltinNS(false),hasGlobalNS(true),isInteger(false)
+	multiname(MemoryAccount* m):name_s_id(UINT32_MAX),ns(reporter_allocator<nsNameAndKind>(m)),cachedType(nullptr),name_type(NAME_OBJECT),isAttribute(false),isStatic(true),hasEmptyNS(true),hasBuiltinNS(false),hasGlobalNS(true),isInteger(false)
 	{
+		name_o.uintval=0;
 	}
 	
 	/*
 		Returns a string name whatever is the name type
 	*/
-	const tiny_string normalizedName(SystemState *sys) const;
+	const tiny_string normalizedName(ASWorker* wrk) const;
 	/*
 	 * 	Return a string id whatever is the name type
 	 */
-	uint32_t normalizedNameId(SystemState *sys) const;
+	uint32_t normalizedNameId(ASWorker* wrk) const;
 	/*
 		Returns a string name whatever is the name type, but does not resolve NAME_OBJECT names
 		this should be used for exception or debug messages to avoid calling 
@@ -459,8 +507,8 @@ struct multiname: public memory_reporter
 	void setName(union asAtom &n, ASWorker* w);
 	void resetNameIfObject();
 	inline bool isQName() const { return ns.size() == 1; }
-	bool toUInt(SystemState *sys, uint32_t& out, bool acceptStringFractions=false, bool* isNumber=nullptr) const;
-	inline bool isEmpty() const { return name_type == NAME_OBJECT && name_o == nullptr;}
+	bool toUInt(ASWorker* wrk, uint32_t& out, bool acceptStringFractions=false, bool* isNumber=nullptr, bool forAVM1=false) const;
+	inline bool isEmpty() const { return name_type == NAME_OBJECT && name_o.uintval == 0;}
 };
 
 class FLOAT 
@@ -600,6 +648,10 @@ public:
 		Blue=r.Blue;
 		Alpha=255;
 		return *this;
+	}
+	bool operator==(const RGBA& r) const
+	{
+		return Red==r.Red && Green==r.Green && Blue==r.Blue && Alpha==r.Alpha;
 	}
 	float rf() const
 	{
@@ -844,12 +896,12 @@ public:
 		if(buf>=0)
 		{
 			int32_t b=buf;
-			return b/65536.0f;
+			return float(b)/65536.0f;
 		}
 		else
 		{
 			int32_t b=-buf;
-			return -(b/65536.0f);
+			return -(float(b)/65536.0f);
 		}
 		//return (buf>>16)+(buf&0xffff)/65536.0f;
 	}
@@ -905,18 +957,30 @@ public:
 	}
 };
 
+struct RectF;
 class RECT
 {
 	friend std::ostream& operator<<(std::ostream& s, const RECT& r);
 	friend std::istream& operator>>(std::istream& stream, RECT& v);
 public:
-	int Xmin;
-	int Xmax;
-	int Ymin;
-	int Ymax;
+	int32_t Xmin;
+	int32_t Xmax;
+	int32_t Ymin;
+	int32_t Ymax;
 public:
 	RECT();
-	RECT(int xmin, int xmax, int ymin, int ymax);
+	RECT(int32_t xmin, int32_t xmax, int32_t ymin, int32_t ymax);
+	RECT(const RECT& r):Xmin(r.Xmin),Xmax(r.Xmax),Ymin(r.Ymin),Ymax(r.Ymax) {}
+	RECT& operator=(const RECT& r)
+	{
+		Xmin=r.Xmin;
+		Xmax=r.Xmax;
+		Ymin=r.Ymin;
+		Ymax=r.Ymax;
+		return *this;
+	}
+	bool operator==(const RECT& r) const;
+	operator RectF() const;
 };
 
 template<class T> class Vector2Tmpl;
@@ -935,6 +999,7 @@ public:
 	Vector2 multiply2D(const Vector2& in) const;
 	MATRIX multiplyMatrix(const MATRIX& r) const;
 	bool operator!=(const MATRIX& r) const;
+	bool operator==(const MATRIX& r) const;
 	MATRIX getInverted() const;
 	bool isInvertible() const;
 	number_t getTranslateX() const
@@ -945,26 +1010,9 @@ public:
 	{
 		return y0;
 	}
-	number_t getScaleX() const
-	{
-		number_t ret=sqrt(xx*xx + yx*yx);
-		if(xx>=0)
-			return ret;
-		else
-			return -ret;
-	}
-	number_t getScaleY() const
-	{
-		number_t ret=sqrt(yy*yy + xy*xy);
-		if(yy>=0)
-			return ret;
-		else
-			return -ret;
-	}
-	number_t getRotation() const
-	{
-		return atan(yx/xx)*180/M_PI;
-	}
+	number_t getScaleX() const;
+	number_t getScaleY() const;
+	number_t getRotation() const;
 	/*
 	 * Implement flash style premultiply matrix operators
 	 */
@@ -1000,29 +1048,31 @@ public:
 	{
 		return Ratio<g.Ratio;
 	}
+	bool operator==(const GRADRECORD& g) const
+	{
+		return Color == g.Color && version == g.version && Ratio == g.Ratio;
+	}
 };
 
 class GRADIENT
 {
 	friend std::istream& operator>>(std::istream& s, GRADIENT& v);
 public:
-	GRADIENT(uint8_t v):SpreadMode(0),InterpolationMode(0),version(v) {}
-	int SpreadMode;
-	int InterpolationMode;
+	GRADIENT(uint8_t v, bool _isFocal):isFocal(_isFocal),SpreadMode(0),InterpolationMode(0),version(v) {}
 	std::vector<GRADRECORD> GradientRecords;
+	FIXED8 FocalPoint;
+	bool isFocal:1;
+	uint8_t SpreadMode:2;
+	uint8_t InterpolationMode:2;
 	uint8_t version;
-};
-
-class FOCALGRADIENT
-{
-	friend std::istream& operator>>(std::istream& s, FOCALGRADIENT& v);
-public:
-	int version;
-	int SpreadMode;
-	int InterpolationMode;
-	int NumGradient;
-	std::vector<GRADRECORD> GradientRecords;
-	float FocalPoint;
+	bool operator==(const GRADIENT& g) const
+	{
+		return version == g.version 
+				&& SpreadMode == g.SpreadMode
+				&& InterpolationMode == g.InterpolationMode
+			    && FocalPoint == g.FocalPoint
+				&& GradientRecords == g.GradientRecords;
+	}
 };
 
 class FILLSTYLEARRAY;
@@ -1038,11 +1088,11 @@ class FILLSTYLE
 public:
 	FILLSTYLE(uint8_t v);
 	FILLSTYLE(const FILLSTYLE& r);
-	FILLSTYLE& operator=(FILLSTYLE r);
+	FILLSTYLE& operator=(const FILLSTYLE& r);
+	bool operator==(const FILLSTYLE& r) const;
 	virtual ~FILLSTYLE();
 	MATRIX Matrix;
 	GRADIENT Gradient;
-	FOCALGRADIENT FocalGradient;
 	_NR<BitmapContainer> bitmap;
 	RECT ShapeBounds;
 	RGBA Color;
@@ -1087,18 +1137,19 @@ public:
 class LINESTYLE2
 {
 public:
-	LINESTYLE2(uint8_t v):StartCapStyle(0),JointStyle(0),HasFillFlag(false),NoHScaleFlag(false),NoVScaleFlag(false),PixelHintingFlag(0),FillType(v),version(v){}
+	LINESTYLE2(uint8_t v):StartCapStyle(0),JointStyle(0),EndCapStyle(0),HasFillFlag(false),NoHScaleFlag(false),NoVScaleFlag(false),PixelHintingFlag(false),NoClose(false),FillType(v),version(v){}
 	LINESTYLE2(const LINESTYLE2& r);
-	LINESTYLE2& operator=(LINESTYLE2 r);
+	LINESTYLE2& operator=(const LINESTYLE2& r);
+	bool operator==(const LINESTYLE2& r) const;
 	virtual ~LINESTYLE2();
-	int StartCapStyle;
-	int JointStyle;
-	bool HasFillFlag;
-	bool NoHScaleFlag;
-	bool NoVScaleFlag;
-	int PixelHintingFlag;
-	UB NoClose;
-	UB EndCapStyle;
+	uint8_t StartCapStyle;
+	uint8_t JointStyle;
+	uint8_t EndCapStyle;
+	bool HasFillFlag:1;
+	bool NoHScaleFlag:1;
+	bool NoVScaleFlag:1;
+	bool PixelHintingFlag:1;
+	bool NoClose:1;
 	UI16_SWF Width;
 	UI16_SWF MiterLimitFactor;
 	RGBA Color;
@@ -1118,15 +1169,15 @@ public:
 class MORPHLINESTYLE2: public MORPHLINESTYLE
 {
 public:
-	UB StartCapStyle;
+	uint8_t StartCapStyle;
 	MORPHFILLSTYLE FillType;
-	UB JoinStyle;
-	UB HasFillFlag;
-	UB NoHScaleFlag;
-	UB NoVScaleFlag;
-	UB PixelHintingFlag;
-	UB NoClose;
-	UB EndCapStyle;
+	uint8_t JoinStyle;
+	bool HasFillFlag:1;
+	bool NoHScaleFlag:1;
+	bool NoVScaleFlag:1;
+	bool PixelHintingFlag:1;
+	bool NoClose:1;
+	uint8_t EndCapStyle;
 	UI16_SWF MiterLimitFactor;
 	std::map<uint16_t,LINESTYLE2> linestylecache;
 };
@@ -1171,36 +1222,30 @@ class SHAPEWITHSTYLE;
 class SHAPERECORD
 {
 public:
-	SHAPE* parent;
-
-	uint32_t MoveBits;
-	int32_t MoveDeltaX;
-	int32_t MoveDeltaY;
-
-	unsigned int FillStyle1;
-	unsigned int FillStyle0;
-	unsigned int LineStyle;
-
-	//Edge record
-	uint32_t NumBits;
-	int32_t DeltaX;
-	int32_t DeltaY;
-
-	int32_t ControlDeltaX;
-	int32_t ControlDeltaY;
-	int32_t AnchorDeltaX;
-	int32_t AnchorDeltaY;
-
-	bool TypeFlag;
-	bool StateNewStyles;
-	bool StateLineStyle;
-	bool StateFillStyle1;
-	bool StateFillStyle0;
-	bool StateMoveTo;
-	bool StraightFlag;
-	bool GeneralLineFlag;
-	bool VertLineFlag;
-	SHAPERECORD(SHAPE* p,BitStream& bs);
+	union
+	{
+		int32_t AnchorDeltaX;
+		struct
+		{
+			uint16_t FillStyle1;
+			uint16_t FillStyle0;
+		};
+	};
+	union
+	{
+		int32_t AnchorDeltaY:18;
+		uint16_t LineStyle;
+	};
+	int32_t DeltaX:18;
+	int32_t DeltaY:18;
+	bool TypeFlag:1;
+	bool StateNewStyles:1;
+	bool StateLineStyle:1;
+	bool StateFillStyle1:1;
+	bool StateFillStyle0:1;
+	bool StateMoveTo:1;
+	bool StraightFlag:1;
+	SHAPERECORD(SHAPE* parent,BitStream& bs);
 };
 
 class TEXTRECORD;
@@ -1210,7 +1255,6 @@ class GLYPHENTRY
 public:
 	UB GlyphIndex;
 	SB GlyphAdvance;
-	TEXTRECORD* parent;
 	GLYPHENTRY(TEXTRECORD* p,BitStream& bs);
 };
 
@@ -1221,17 +1265,15 @@ class TEXTRECORD
 public:
 	std::vector <GLYPHENTRY> GlyphEntries;
 	DefineTextTag* parent;
-	UB TextRecordType;
-	UB StyleFlagsReserved;
-	UB StyleFlagsHasFont;
-	UB StyleFlagsHasColor;
-	UB StyleFlagsHasYOffset;
-	UB StyleFlagsHasXOffset;
 	RGBA TextColor;
 	SI16_SWF XOffset;
 	SI16_SWF YOffset;
 	UI16_SWF TextHeight;
 	UI16_SWF FontID;
+	bool StyleFlagsHasColor:1;
+	bool StyleFlagsHasYOffset:1;
+	bool StyleFlagsHasXOffset:1;
+	bool empty:1;
 	TEXTRECORD(DefineTextTag* p):parent(p){}
 };
 class CharacterRenderer;
@@ -1242,16 +1284,14 @@ class SHAPE
 public:
 	SHAPE(uint8_t v=0,bool _forfont=false):fillOffset(0),lineOffset(0),version(v),forfont(_forfont){}
 	virtual ~SHAPE();
-	UB NumFillBits;
-	UB NumLineBits;
-	unsigned int fillOffset;
-	unsigned int lineOffset;
-	uint8_t version; /* version of the DefineShape tag, 0 if
+	uint8_t NumFillBits:4;
+	uint8_t NumLineBits:4;
+	uint16_t fillOffset;
+	uint16_t lineOffset;
+	uint8_t version:3; /* version of the DefineShape tag, 0 if
 			  * DefineFont or other tag */
+	bool forfont:1;
 	std::vector<SHAPERECORD> ShapeRecords;
-	std::map<int,CharacterRenderer*> scaledtexturecache;
-	
-	bool forfont;
 };
 
 class SHAPEWITHSTYLE : public SHAPE
@@ -1267,17 +1307,14 @@ class CXFORMWITHALPHA
 {
 	friend std::istream& operator>>(std::istream& stream, CXFORMWITHALPHA& v);
 private:
-	UB HasAddTerms;
-	UB HasMultTerms;
-	UB NBits;
-	SB RedMultTerm;
-	SB GreenMultTerm;
-	SB BlueMultTerm;
-	SB AlphaMultTerm;
-	SB RedAddTerm;
-	SB GreenAddTerm;
-	SB BlueAddTerm;
-	SB AlphaAddTerm;
+	int16_t RedMultTerm;
+	int16_t GreenMultTerm;
+	int16_t BlueMultTerm;
+	int16_t AlphaMultTerm;
+	int16_t RedAddTerm;
+	int16_t GreenAddTerm;
+	int16_t BlueAddTerm;
+	int16_t AlphaAddTerm;
 public:
 	void getParameters(number_t& redMultiplier, 
 			   number_t& greenMultiplier, 
@@ -1288,151 +1325,202 @@ public:
 			   number_t& blueOffset,
 			   number_t& alphaOffset) const;
 	float transformedAlpha(float alpha) const;
-	bool isfilled() const {return  HasAddTerms || HasMultTerms; }
-};
-
-class CXFORM
-{
+	bool isIdentity() const;
 };
 
 class DROPSHADOWFILTER
 {
 public:
-    RGBA DropShadowColor;
-    FIXED BlurX;
-    FIXED BlurY;
-    FIXED Angle;
-    FIXED Distance;
-    int Passes;
-    FIXED8 Strength;
-    bool InnerShadow;
-    bool Knockout;
-    bool CompositeSource;
+	DROPSHADOWFILTER():Passes(0){}
+	RGBA DropShadowColor;
+	FIXED BlurX;
+	FIXED BlurY;
+	FIXED Angle;
+	FIXED Distance;
+	FIXED8 Strength;
+	bool InnerShadow:1;
+	bool Knockout:1;
+	bool CompositeSource:1;
+	uint8_t Passes:4;
 };
 
 class BLURFILTER
 {
 public:
+	BLURFILTER():Passes(0){}
 	FIXED BlurX;
 	FIXED BlurY;
-	int Passes;
+	uint8_t Passes:4;
 };
 
 class GLOWFILTER
 {
 public:
-    RGBA GlowColor;
-    FIXED BlurX;
-    FIXED BlurY;
-    int Passes;
-    FIXED8 Strength;
-    bool InnerGlow;
-    bool Knockout;
-    bool CompositeSource;
+	GLOWFILTER():Passes(0){}
+	RGBA GlowColor;
+	FIXED BlurX;
+	FIXED BlurY;
+	FIXED8 Strength;
+	bool InnerGlow:1;
+	bool Knockout:1;
+	bool CompositeSource:1;
+	uint8_t Passes:4;
 };
 
 class BEVELFILTER
 {
 public:
-    RGBA ShadowColor;
-    RGBA HighlightColor;
-    FIXED BlurX;
-    FIXED BlurY;
-    FIXED Angle;
-    FIXED Distance;
-    int Passes;
-    FIXED8 Strength;
-    bool InnerShadow;
-    bool Knockout;
-    bool CompositeSource;
-    bool OnTop;
+	BEVELFILTER():Passes(0){}
+	RGBA ShadowColor;
+	RGBA HighlightColor;
+	FIXED BlurX;
+	FIXED BlurY;
+	FIXED Angle;
+	FIXED Distance;
+	FIXED8 Strength;
+	bool InnerShadow:1;
+	bool Knockout:1;
+	bool CompositeSource:1;
+	bool OnTop:1;
+	uint8_t Passes:4;
 };
 
 class GRADIENTGLOWFILTER
 {
 public:
-    std::vector<RGBA> GradientColors;
-    std::vector<UI8> GradientRatio;
-    FIXED BlurX;
-    FIXED BlurY;
-    FIXED Angle;
-    FIXED Distance;
-    int Passes;
-    FIXED8 Strength;
-    bool InnerGlow;
-    bool Knockout;
-    bool CompositeSource;
-	bool OnTop;
+	GRADIENTGLOWFILTER():GradientColors(nullptr),GradientRatio(nullptr),Passes(0){}
+	~GRADIENTGLOWFILTER()
+	{
+		if (GradientColors)
+			delete[] GradientColors;
+		if(GradientRatio)
+			delete[] GradientRatio;
+	}
+	RGBA* GradientColors;
+	UI8* GradientRatio;
+	UI8 NumColors;
+	FIXED BlurX;
+	FIXED BlurY;
+	FIXED Angle;
+	FIXED Distance;
+	FIXED8 Strength;
+	bool InnerGlow:1;
+	bool Knockout:1;
+	bool CompositeSource:1;
+	bool OnTop:1;
+	uint8_t Passes:4;
 };
 
 class CONVOLUTIONFILTER
 {
 public:
-    FLOAT Divisor;
-    FLOAT Bias;
-    std::vector<FLOAT> Matrix;
-    RGBA DefaultColor;
-    UI8 MatrixX;
-    UI8 MatrixY;
-    bool Clamp;
-    bool PreserveAlpha;
+	CONVOLUTIONFILTER():Matrix(nullptr){}
+	~CONVOLUTIONFILTER()
+	{
+		if (Matrix)
+			delete[] Matrix;
+	}
+	FLOAT Divisor;
+	FLOAT Bias;
+	FLOAT* Matrix;
+	RGBA DefaultColor;
+	UI8 MatrixX;
+	UI8 MatrixY;
+	bool Clamp:1;
+	bool PreserveAlpha:1;
 };
 
 class COLORMATRIXFILTER
 {
 public:
-    FLOAT Matrix[20];
+	COLORMATRIXFILTER(){}
+	FLOAT Matrix[20];
 };
 
 class GRADIENTBEVELFILTER
 {
 public:
-    std::vector<RGBA> GradientColors;
-    std::vector<UI8> GradientRatio;
-    FIXED BlurX;
-    FIXED BlurY;
-    FIXED Angle;
-    FIXED Distance;
-    int Passes;
-    FIXED8 Strength;
-    bool InnerShadow;
-    bool Knockout;
-    bool CompositeSource;
-    bool OnTop;
+	GRADIENTBEVELFILTER():GradientColors(nullptr),GradientRatio(nullptr),Passes(0){}
+	~GRADIENTBEVELFILTER()
+	{
+		if (GradientColors)
+			delete[] GradientColors;
+		if(GradientRatio)
+			delete[] GradientRatio;
+	}
+	RGBA* GradientColors;
+	UI8* GradientRatio;
+	UI8 NumColors;
+	FIXED BlurX;
+	FIXED BlurY;
+	FIXED Angle;
+	FIXED Distance;
+	FIXED8 Strength;
+	bool InnerShadow:1;
+	bool Knockout:1;
+	bool CompositeSource:1;
+	bool OnTop:1;
+	uint8_t Passes:4;
 };
 
 class FILTER
 {
 public:
+	FILTER() {}
+	~FILTER() {}
+	FILTER(const FILTER& f);
+	FILTER& operator=(const FILTER& f);
+	enum FILTER_ID { FILTER_DROPSHADOW = 0, FILTER_BLUR = 1, FILTER_GLOW = 2, FILTER_BEVEL = 3, FILTER_GRADIENTGLOW = 4, FILTER_CONVOLUTION = 5, FILTER_COLORMATRIX = 6, FILTER_GRADIENTBEVEL = 7 };
 	UI8 FilterID;
-	DROPSHADOWFILTER DropShadowFilter;
-	BLURFILTER BlurFilter;
-	GLOWFILTER GlowFilter;
-	BEVELFILTER BevelFilter;
-	GRADIENTGLOWFILTER GradientGlowFilter;
-	CONVOLUTIONFILTER ConvolutionFilter;
-	COLORMATRIXFILTER ColorMatrixFilter;
-	GRADIENTBEVELFILTER GradientBevelFilter;
+	union
+	{
+		DROPSHADOWFILTER DropShadowFilter;
+		BLURFILTER BlurFilter;
+		GLOWFILTER GlowFilter;
+		BEVELFILTER BevelFilter;
+		GRADIENTGLOWFILTER GradientGlowFilter;
+		CONVOLUTIONFILTER ConvolutionFilter;
+		COLORMATRIXFILTER ColorMatrixFilter;
+		GRADIENTBEVELFILTER GradientBevelFilter;
+	};
 };
 
 class FILTERLIST
 {
 public:
-	std::vector<FILTER> Filters;
+	FILTERLIST():Filters(nullptr){}
+	FILTERLIST(const FILTERLIST& r)
+	{
+		NumberOfFilters=r.NumberOfFilters;
+		if (r.Filters)
+		{
+			Filters = new FILTER[NumberOfFilters];
+			for (uint32_t i=0; i < NumberOfFilters; i++)
+				Filters[i]=r.Filters[i];
+		}
+		else
+			Filters=nullptr;
+	}
+	~FILTERLIST()
+	{
+		if (Filters)
+			delete[] Filters;
+	}
+	UI8 NumberOfFilters;
+	FILTER* Filters;
 };
 
 class BUTTONRECORD
 {
 public:
-	BUTTONRECORD(int v):buttonVersion(v){}
-	int buttonVersion;
-	UB ButtonReserved;
-	UB ButtonHasBlendMode;
-	UB ButtonHasFilterList;
-	UB ButtonStateHitTest;
-	UB ButtonStateDown;
-	UB ButtonStateOver;
-	UB ButtonStateUp;
+	BUTTONRECORD(uint8_t v):buttonVersion(v){}
+	uint8_t buttonVersion:2;
+	bool ButtonHasBlendMode:1;
+	bool ButtonHasFilterList:1;
+	bool ButtonStateHitTest:1;
+	bool ButtonStateDown:1;
+	bool ButtonStateOver:1;
+	bool ButtonStateUp:1;
 	MATRIX PlaceMatrix;
 	FILTERLIST FilterList;
 	CXFORMWITHALPHA	ColorTransform;
@@ -1442,7 +1530,7 @@ public:
 
 	bool isNull() const
 	{
-		return !(ButtonReserved | ButtonHasBlendMode | ButtonHasFilterList | ButtonStateHitTest | ButtonStateDown | ButtonStateOver | ButtonStateUp);
+		return !(ButtonHasBlendMode | ButtonHasFilterList | ButtonStateHitTest | ButtonStateDown | ButtonStateOver | ButtonStateUp);
 	}
 };
 
@@ -1452,25 +1540,25 @@ private:
 	uint32_t swfversion;
 public:
 	CLIPEVENTFLAGS(uint32_t v):swfversion(v) {}
-	bool ClipEventKeyUp;
-	bool ClipEventKeyDown;
-	bool ClipEventMouseUp;
-	bool ClipEventMouseDown;
-	bool ClipEventMouseMove;
-	bool ClipEventUnload;
-	bool ClipEventEnterFrame;
-	bool ClipEventLoad;
-	bool ClipEventDragOver;
-	bool ClipEventRollOut;
-	bool ClipEventRollOver;
-	bool ClipEventReleaseOutside;
-	bool ClipEventRelease;
-	bool ClipEventPress;
-	bool ClipEventInitialize;
-	bool ClipEventData;
-	bool ClipEventConstruct;
-	bool ClipEventKeyPress;
-	bool ClipEventDragOut;
+	bool ClipEventKeyUp:1;
+	bool ClipEventKeyDown:1;
+	bool ClipEventMouseUp:1;
+	bool ClipEventMouseDown:1;
+	bool ClipEventMouseMove:1;
+	bool ClipEventUnload:1;
+	bool ClipEventEnterFrame:1;
+	bool ClipEventLoad:1;
+	bool ClipEventDragOver:1;
+	bool ClipEventRollOut:1;
+	bool ClipEventRollOver:1;
+	bool ClipEventReleaseOutside:1;
+	bool ClipEventRelease:1;
+	bool ClipEventPress:1;
+	bool ClipEventInitialize:1;
+	bool ClipEventData:1;
+	bool ClipEventConstruct:1;
+	bool ClipEventKeyPress:1;
+	bool ClipEventDragOut:1;
 	bool isNull();
 	uint32_t getSWFVersion() const { return swfversion; }
 };
@@ -1511,16 +1599,11 @@ public:
 class SOUNDINFO
 {
 public:
-	UB SyncStop;
-	UB SyncNoMultiple;
-	UB HasEnvelope;
-	UB HasLoops;
-	UB HasOutPoint;
-	UB HasInPoint;
+	bool SyncStop:1;
+	bool SyncNoMultiple:1;
 	UI32_SWF InPoint;
 	UI32_SWF OutPoint;
 	UI16_SWF LoopCount;
-	UI8 EnvPoints;
 	std::vector<SOUNDENVELOPE> SoundEnvelope;
 };
 
@@ -1532,7 +1615,8 @@ public:
 	unsigned int next_FP;
 	bool stop_FP;
 	bool explicit_FP;
-	bool explicit_play;
+	bool inEnterFrame;
+	bool gotoQueued;
 	bool creatingframe;
 	bool frameadvanced;
 	RunState();
@@ -1543,7 +1627,8 @@ public:
 		next_FP = 0;
 		stop_FP = false;
 		explicit_FP = false;
-		explicit_play=false;
+		inEnterFrame = false;
+		gotoQueued = false;
 		creatingframe = false;
 		frameadvanced = false;
 	}
@@ -1567,15 +1652,15 @@ public:
 	  ,CondOverDownToOverUp(false),CondOverUpToOverDown(false),CondOverUpToIdle(false),CondIdleToOverUp(false),CondOverDownToIdle(false),startactionpos(0)
 	{}
 	UI16_SWF CondActionSize;
-	bool CondIdleToOverDown;
-	bool CondOutDownToIdle;
-	bool CondOutDownToOverDown;
-	bool CondOverDownToOutDown;
-	bool CondOverDownToOverUp;
-	bool CondOverUpToOverDown;
-	bool CondOverUpToIdle;
-	bool CondIdleToOverUp;
-	bool CondOverDownToIdle;
+	bool CondIdleToOverDown:1;
+	bool CondOutDownToIdle:1;
+	bool CondOutDownToOverDown:1;
+	bool CondOverDownToOutDown:1;
+	bool CondOverDownToOverUp:1;
+	bool CondOverUpToOverDown:1;
+	bool CondOverUpToIdle:1;
+	bool CondIdleToOverUp:1;
+	bool CondOverDownToIdle:1;
 	uint32_t CondKeyPress;
 	uint32_t startactionpos;
 	std::vector<uint8_t> actions;
@@ -1588,7 +1673,7 @@ ASObject* abstract_d_constant(ASWorker* wrk, number_t i);
 ASObject* abstract_di(ASWorker* wrk, int64_t i);
 ASObject* abstract_s(ASWorker* wrk);
 ASObject* abstract_s(ASWorker* wrk, const char* s, uint32_t len);
-ASObject* abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull);
+ASObject* abstract_s(ASWorker* wrk, const char* s, int numbytes, int numchars, bool issinglebyte, bool hasNull, bool isInteger);
 ASObject* abstract_s(ASWorker* wrk, const char* s);
 ASObject* abstract_s(ASWorker* wrk, const tiny_string& s);
 ASObject* abstract_s(ASWorker* wrk, uint32_t stringId);

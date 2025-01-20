@@ -20,6 +20,7 @@
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include <map>
+#include "platforms/engineutils.h"
 #include "backends/security.h"
 #include "scripting/abc.h"
 #include "scripting/flash/net/flashnet.h"
@@ -28,58 +29,70 @@
 #include "scripting/flash/system/flashsystem.h"
 #include "scripting/flash/media/flashmedia.h"
 #include "scripting/flash/utils/ByteArray.h"
+#include "scripting/flash/display/RootMovieClip.h"
 #include "compat.h"
 #include "backends/audio.h"
 #include "backends/builtindecoder.h"
 #include "backends/rendering.h"
 #include "backends/streamcache.h"
 #include "scripting/argconv.h"
+#include "scripting/toplevel/Array.h"
 #include "scripting/toplevel/UInteger.h"
 #include "scripting/toplevel/Number.h"
 
 using namespace std;
 using namespace lightspark;
 
-URLRequest::URLRequest(ASWorker* wrk, Class_base* c, const tiny_string u, const tiny_string m, _NR<ASObject> d):ASObject(wrk,c,T_OBJECT,SUBTYPE_URLREQUEST),method(m=="POST" ? POST : GET),url(u),data(d),contentType("application/x-www-form-urlencoded"),
-	requestHeaders(Class<Array>::getInstanceSNoArgs(wrk))
+URLRequest::URLRequest(ASWorker* wrk, Class_base* c, const tiny_string u, const tiny_string m, const asAtom d,ApplicationDomain* _appDomain):ASObject(wrk,c,T_OBJECT,SUBTYPE_URLREQUEST),
+	method(m),url(u),data(d),requestHeaders(nullptr),contentType("application/x-www-form-urlencoded"),
+	appDomain(_appDomain)
 {
+	ASATOM_ADDSTOREDMEMBER(data);
+	if (_appDomain==nullptr)
+		appDomain = c->getSystemState()->mainClip->applicationDomain.getPtr();
 }
 
 void URLRequest::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_FINAL | CLASS_SEALED);
 	c->isReusable=true;
-	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(c->getSystemState(),_setURL),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(c->getSystemState(),_getURL,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(c->getSystemState(),_setMethod),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(c->getSystemState(),_getMethod,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(c->getSystemState(),_setData),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(c->getSystemState(),_getData,0,Class<ASObject>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("digest","",Class<IFunction>::getFunction(c->getSystemState(),_setDigest),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("digest","",Class<IFunction>::getFunction(c->getSystemState(),_getDigest,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("url","",c->getSystemState()->getBuiltinFunction(_setURL),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("url","",c->getSystemState()->getBuiltinFunction(_getURL,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("method","",c->getSystemState()->getBuiltinFunction(_setMethod),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("method","",c->getSystemState()->getBuiltinFunction(_getMethod,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("data","",c->getSystemState()->getBuiltinFunction(_setData),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("data","",c->getSystemState()->getBuiltinFunction(_getData,0,Class<ASObject>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("digest","",c->getSystemState()->getBuiltinFunction(_setDigest),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("digest","",c->getSystemState()->getBuiltinFunction(_getDigest,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("requestHeaders","",c->getSystemState()->getBuiltinFunction(_setRequestHeaders),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("requestHeaders","",c->getSystemState()->getBuiltinFunction(_getRequestHeaders,0,Class<Array>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c,contentType,ASString);
-	REGISTER_GETTER_SETTER_RESULTTYPE(c,requestHeaders,Array);
 }
 
 URLInfo URLRequest::getRequestURL() const
 {
-	URLInfo ret=getSys()->mainClip->getBaseURL().goToURL(url);
-	if(method!=GET)
+	tiny_string urlencoded = URLInfo::encode(url, URLInfo::ENCODE_SPACES);
+	URLInfo ret=appDomain->getBaseURL().goToURL(urlencoded);
+	if(method.uppercase()!="GET")
 		return ret;
 
-	if(data.isNull())
+	if(asAtomHandler::isInvalid(data))
 		return ret;
 
-	if(data->getClass()==Class<ByteArray>::getClass(data->getSystemState()))
+	if(asAtomHandler::is<ByteArray>(data))
 		ret=ret.getParsedURL();
 	else
 	{
 		tiny_string newURL = ret.getParsedURL();
-		if(ret.getQuery() == "")
-			newURL += "?";
-		else
-			newURL += "&amp;";
-		newURL += data->toString();
+		tiny_string s = asAtomHandler::toString(data,getInstanceWorker());
+		if (!s.empty())
+		{
+			if(ret.getQuery() == "")
+				newURL += "?";
+			else
+				newURL += "&amp;";
+			newURL += s;
+		}
 		ret=ret.goToURL(newURL);
 	}
 	return ret;
@@ -152,7 +165,7 @@ void URLRequest::validateHeaderName(const tiny_string& headerName) const
 std::list<tiny_string> URLRequest::getHeaders() const
 {
 	list<tiny_string> headers;
-	if (requestHeaders.isNull())
+	if (!requestHeaders)
 		return headers;
 	int headerTotalLen = 0;
 	for (unsigned i=0; i<requestHeaders->size(); i++)
@@ -197,10 +210,9 @@ std::list<tiny_string> URLRequest::getHeaders() const
 
 tiny_string URLRequest::getContentTypeHeader() const
 {
-	if(method!=POST)
+	if(method.uppercase()!="POST")
 		return "";
-
-	if(!data.isNull() && data->getClass()==Class<URLVariables>::getClass(data->getSystemState()))
+	if(asAtomHandler::is<URLVariables>(data))
 		return "Content-type: application/x-www-form-urlencoded";
 	else
 		return tiny_string("Content-Type: ") + validatedContentType();
@@ -208,21 +220,21 @@ tiny_string URLRequest::getContentTypeHeader() const
 
 void URLRequest::getPostData(vector<uint8_t>& outData) const
 {
-	if(method!=POST)
+	if(method.uppercase()!="POST")
 		return;
 
-	if(data.isNull())
+	if(asAtomHandler::isInvalid(data))
 		return;
 
-	if(data->getClass()==Class<ByteArray>::getClass(data->getSystemState()))
+	if(asAtomHandler::is<ByteArray>(data))
 	{
-		ByteArray *ba=data->as<ByteArray>();
+		ByteArray *ba=asAtomHandler::as<ByteArray>(data);
 		const uint8_t *buf=ba->getBuffer(ba->getLength(), false);
 		outData.insert(outData.end(),buf,buf+ba->getLength());
 	}
 	else
 	{
-		const tiny_string& strData=data->toString();
+		const tiny_string& strData=asAtomHandler::toString(data,getInstanceWorker());
 		outData.insert(outData.end(),strData.raw_buf(),strData.raw_buf()+strData.numBytes());
 	}
 }
@@ -230,17 +242,23 @@ void URLRequest::getPostData(vector<uint8_t>& outData) const
 void URLRequest::finalize()
 {
 	ASObject::finalize();
-	data.reset();
-	requestHeaders.reset();
+	ASATOM_REMOVESTOREDMEMBER(data);
+	data = asAtomHandler::invalidAtom;
+	if (requestHeaders)
+		requestHeaders->removeStoredMember();
+	requestHeaders=nullptr;
 }
 
 bool URLRequest::destruct()
 {
-	method=GET;
+	method="GET";
 	url="";
 	digest="";
-	data.reset();
-	requestHeaders.reset();
+	ASATOM_REMOVESTOREDMEMBER(data);
+	data = asAtomHandler::invalidAtom;
+	if (requestHeaders)
+		requestHeaders->removeStoredMember();
+	requestHeaders=nullptr;
 	return ASObject::destruct();
 }
 
@@ -249,17 +267,27 @@ void URLRequest::prepareShutdown()
 	if (preparedforshutdown)
 		return;
 	ASObject::prepareShutdown();
-	if (data)
-		data->prepareShutdown();
+	if (asAtomHandler::isObject(data))
+		asAtomHandler::getObjectNoCheck(data)->prepareShutdown();
 	if (requestHeaders)
 		requestHeaders->prepareShutdown();
 }
-
+bool URLRequest::countCylicMemberReferences(garbagecollectorstate& gcstate)
+{
+	bool ret = ASObject::countCylicMemberReferences(gcstate);
+	if (asAtomHandler::isObject(data))
+		ret = asAtomHandler::getObjectNoCheck(data)->countAllCylicMemberReferences(gcstate) || ret;
+	if (requestHeaders)
+		ret = requestHeaders->countAllCylicMemberReferences(gcstate) || ret;
+	return ret;
+}
 ASFUNCTIONBODY_ATOM(URLRequest,_constructor)
 {
 	URLRequest* th=asAtomHandler::as<URLRequest>(obj);
 	ARG_CHECK(ARG_UNPACK(th->url, ""));
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(URLRequest,contentType)
 
 ASFUNCTIONBODY_ATOM(URLRequest,_setURL)
 {
@@ -276,39 +304,29 @@ ASFUNCTIONBODY_ATOM(URLRequest,_getURL)
 ASFUNCTIONBODY_ATOM(URLRequest,_setMethod)
 {
 	URLRequest* th=asAtomHandler::as<URLRequest>(obj);
-	assert_and_throw(argslen==1);
-	const tiny_string& tmp=asAtomHandler::toString(args[0],wrk);
-	if(tmp=="GET")
-		th->method=GET;
-	else if(tmp=="POST")
-		th->method=POST;
+	tiny_string method;
+	ARG_CHECK(ARG_UNPACK(method));
+	if(method=="GET" || method=="get" || method=="POST" || method=="post")
+		th->method=method;
 	else
-		throw UnsupportedException("Unsupported method in URLLoader");
+		createError<ArgumentError>(wrk,kInvalidEnumError,"method");
 }
 
 ASFUNCTIONBODY_ATOM(URLRequest,_getMethod)
 {
 	URLRequest* th=asAtomHandler::as<URLRequest>(obj);
-	switch(th->method)
-	{
-		case GET:
-			ret = asAtomHandler::fromString(wrk->getSystemState(),"GET");
-			break;
-		case POST:
-			ret = asAtomHandler::fromString(wrk->getSystemState(),"POST");
-			break;
-	}
+	ret = asAtomHandler::fromString(wrk->getSystemState(),th->method);
 }
 
 ASFUNCTIONBODY_ATOM(URLRequest,_getData)
 {
 	URLRequest* th=asAtomHandler::as<URLRequest>(obj);
-	if(th->data.isNull())
+	if(asAtomHandler::isInvalid(th->data))
 		asAtomHandler::setUndefined(ret);
 	else
 	{
-		th->data->incRef();
-		ret = asAtomHandler::fromObject(th->data.getPtr());
+		ASATOM_INCREF(th->data);
+		ret = th->data;
 	}
 }
 
@@ -317,8 +335,11 @@ ASFUNCTIONBODY_ATOM(URLRequest,_setData)
 	URLRequest* th=asAtomHandler::as<URLRequest>(obj);
 	assert_and_throw(argslen==1);
 
-	ASATOM_INCREF(args[0]);
-	th->data=_MR(asAtomHandler::toObject(args[0],wrk));
+	if (th->data.uintval == args[0].uintval)
+		return;
+	ASATOM_REMOVESTOREDMEMBER(th->data);
+	th->data=args[0];
+	ASATOM_ADDSTOREDMEMBER(th->data);
 }
 
 ASFUNCTIONBODY_ATOM(URLRequest,_getDigest)
@@ -362,8 +383,28 @@ ASFUNCTIONBODY_ATOM(URLRequest,_setDigest)
 	th->digest = value;
 }
 
-ASFUNCTIONBODY_GETTER_SETTER(URLRequest,contentType)
-ASFUNCTIONBODY_GETTER_SETTER(URLRequest,requestHeaders)
+ASFUNCTIONBODY_ATOM(URLRequest,_getRequestHeaders)
+{
+	URLRequest* th = asAtomHandler::as<URLRequest>(obj);
+	if (!th->requestHeaders)
+		th->requestHeaders = Class<Array>::getInstanceSNoArgs(wrk);
+	th->requestHeaders->incRef();
+	ret = asAtomHandler::fromObjectNoPrimitive(th->requestHeaders);
+}
+ASFUNCTIONBODY_ATOM(URLRequest,_setRequestHeaders)
+{
+	URLRequest* th = asAtomHandler::as<URLRequest>(obj);
+	_NR<Array> requestheaders;
+	ARG_CHECK(ARG_UNPACK(requestheaders));
+	if (th->requestHeaders)
+		th->requestHeaders->removeStoredMember();
+	th->requestHeaders = requestheaders.getPtr();
+	if (th->requestHeaders)
+	{
+		th->requestHeaders->incRef();
+		th->requestHeaders->addStoredMember();
+	}
+}
 
 void URLRequestMethod::sinit(Class_base* c)
 {
@@ -456,7 +497,7 @@ void URLLoaderThread::execute()
 	}
 }
 
-URLLoader::URLLoader(ASWorker* wrk,Class_base* c):EventDispatcher(wrk,c),dataFormat("text"),data(),job(nullptr),timestamp_last_progress(0)
+URLLoader::URLLoader(ASWorker* wrk,Class_base* c):EventDispatcher(wrk,c),dataFormat("text"),data(),job(nullptr),timestamp_last_progress(0),bytesLoaded(0),bytesTotal(UINT32_MAX)
 {
 	subtype=SUBTYPE_URLLOADER;
 }
@@ -479,12 +520,12 @@ void URLLoader::prepareShutdown()
 void URLLoader::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("dataFormat","",Class<IFunction>::getFunction(c->getSystemState(),_getDataFormat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(c->getSystemState(),_getData,0,Class<ASObject>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(c->getSystemState(),_setData),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("dataFormat","",Class<IFunction>::getFunction(c->getSystemState(),_setDataFormat),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(c->getSystemState(),load),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("dataFormat","",c->getSystemState()->getBuiltinFunction(_getDataFormat,0,Class<ASString>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("data","",c->getSystemState()->getBuiltinFunction(_getData,0,Class<ASObject>::getRef(c->getSystemState()).getPtr()),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("data","",c->getSystemState()->getBuiltinFunction(_setData),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("dataFormat","",c->getSystemState()->getBuiltinFunction(_setDataFormat),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("load","",c->getSystemState()->getBuiltinFunction(load),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(close),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c,bytesLoaded,UInteger);
 	REGISTER_GETTER_SETTER_RESULTTYPE(c,bytesTotal,UInteger);
 }
@@ -500,9 +541,10 @@ void URLLoader::threadFinished(IThreadJob *finishedJob)
 	// job.
 	Locker l(spinlock);
 	if(finishedJob==job)
+	{
 		job=nullptr;
-
-	delete finishedJob;
+		delete finishedJob;
+	}
 }
 
 void URLLoader::setData(_NR<ASObject> newData)
@@ -544,7 +586,6 @@ ASFUNCTIONBODY_ATOM(URLLoader,load)
 	ASObject* arg=asAtomHandler::getObject(args[0]);
 	URLRequest* urlRequest=Class<URLRequest>::dyncast(arg);
 	assert_and_throw(urlRequest);
-
 	{
 		Locker l(th->spinlock);
 		if(th->job)
@@ -564,6 +605,8 @@ ASFUNCTIONBODY_ATOM(URLLoader,load)
 	//URLLoader ALWAYS checks for policy files, in contrast to NetStream.play().
 	SecurityManager::checkURLStaticAndThrow(url, ~(SecurityManager::LOCAL_WITH_FILE),
 		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED, true);
+	if (wrk->currentCallContext && wrk->currentCallContext->exceptionthrown)
+		return;
 
 	//TODO: should we disallow accessing local files in a directory above 
 	//the current one like we do with NetStream.play?
@@ -679,22 +722,22 @@ void SharedObject::prepareShutdown()
 void SharedObject::sinit(Class_base* c)
 {
 	CLASS_SETUP_NO_CONSTRUCTOR(c, EventDispatcher, CLASS_SEALED);
-	c->setDeclaredMethodByQName("getLocal","",Class<IFunction>::getFunction(c->getSystemState(),getLocal,1,Class<SharedObject>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("getRemote","",Class<IFunction>::getFunction(c->getSystemState(),getRemote),NORMAL_METHOD,false);
-	c->setDeclaredMethodByQName("flush","",Class<IFunction>::getFunction(c->getSystemState(),flush),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(c->getSystemState(),clear),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(c->getSystemState(),connect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("setProperty","",Class<IFunction>::getFunction(c->getSystemState(),setProperty),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getLocal","",c->getSystemState()->getBuiltinFunction(getLocal,1,Class<SharedObject>::getRef(c->getSystemState()).getPtr()),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("getRemote","",c->getSystemState()->getBuiltinFunction(getRemote),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("flush","",c->getSystemState()->getBuiltinFunction(flush),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("clear","",c->getSystemState()->getBuiltinFunction(clear),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("connect","",c->getSystemState()->getBuiltinFunction(connect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setProperty","",c->getSystemState()->getBuiltinFunction(setProperty),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c,client);
 	REGISTER_GETTER_RESULTTYPE(c,data,ASObject);
-	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_getDefaultObjectEncoding),GETTER_METHOD,false);
-	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_setDefaultObjectEncoding),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",c->getSystemState()->getBuiltinFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",c->getSystemState()->getBuiltinFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
 	REGISTER_SETTER(c,fps);
 	REGISTER_GETTER_SETTER(c,objectEncoding);
-	c->setDeclaredMethodByQName("preventBackup","",Class<IFunction>::getFunction(c->getSystemState(),_getPreventBackup),GETTER_METHOD,false);
-	c->setDeclaredMethodByQName("preventBackup","",Class<IFunction>::getFunction(c->getSystemState(),_setPreventBackup),SETTER_METHOD,false);
-	c->setDeclaredMethodByQName("size","",Class<IFunction>::getFunction(c->getSystemState(),_getSize),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("preventBackup","",c->getSystemState()->getBuiltinFunction(_getPreventBackup),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("preventBackup","",c->getSystemState()->getBuiltinFunction(_setPreventBackup),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("size","",c->getSystemState()->getBuiltinFunction(_getSize),GETTER_METHOD,true);
 
 	getSys()->staticSharedObjectDefaultObjectEncoding = OBJECT_ENCODING::AMF3;
 	getSys()->staticSharedObjectPreventBackup = false;
@@ -727,7 +770,7 @@ ASFUNCTIONBODY_ATOM(SharedObject,getLocal)
 	tiny_string name;
 	tiny_string localPath;
 	bool secure;
-	if (!wrk->getSystemState()->mainClip->usesActionScript3)
+	if (!wrk->getSystemState()->mainClip->needsActionScript3())
 	{
 		// contrary to spec, Adobe allows getLocal() calls with 0 arguments on AVM1
 		ARG_CHECK(ARG_UNPACK(name,"") (localPath,"") (secure,false));
@@ -802,7 +845,7 @@ ASFUNCTIONBODY_ATOM(SharedObject,flush)
 		createError<ASError>(wrk,0,"flushing SharedObject failed");
 		return;
 	}
-	if (!wrk->getSystemState()->mainClip->usesActionScript3)
+	if (!wrk->getSystemState()->mainClip->needsActionScript3())
 		ret = asAtomHandler::trueAtom;
 	else
 		ret = asAtomHandler::fromString(wrk->getSystemState(),"flushed");
@@ -884,7 +927,7 @@ void IDynamicPropertyOutput::linkTraits(Class_base* c)
 void DynamicPropertyOutput::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_FINAL);
-	c->setDeclaredMethodByQName("writeDynamicProperty","",Class<IFunction>::getFunction(c->getSystemState(),writeDynamicProperty),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeDynamicProperty","",c->getSystemState()->getBuiltinFunction(writeDynamicProperty),NORMAL_METHOD,true);
 	c->addImplementedInterface(InterfaceClass<IDynamicPropertyOutput>::getClass(c->getSystemState()));
 	IDynamicPropertyOutput::linkTraits(c);
 }
@@ -927,27 +970,24 @@ NetConnection::NetConnection(ASWorker* wrk, Class_base* c):
 void NetConnection::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(c->getSystemState(),connect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("call","",Class<IFunction>::getFunction(c->getSystemState(),call),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("connected","",Class<IFunction>::getFunction(c->getSystemState(),_getConnected),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_getDefaultObjectEncoding),GETTER_METHOD,false);
-	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_setDefaultObjectEncoding),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("connect","",c->getSystemState()->getBuiltinFunction(connect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("call","",c->getSystemState()->getBuiltinFunction(call),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("connected","",c->getSystemState()->getBuiltinFunction(_getConnected),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",c->getSystemState()->getBuiltinFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",c->getSystemState()->getBuiltinFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
 	c->getSystemState()->staticNetConnectionDefaultObjectEncoding = OBJECT_ENCODING::DEFAULT;
-	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_getObjectEncoding),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(c->getSystemState(),_setObjectEncoding),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("protocol","",Class<IFunction>::getFunction(c->getSystemState(),_getProtocol),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("proxyType","",Class<IFunction>::getFunction(c->getSystemState(),_getProxyType),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("proxyType","",Class<IFunction>::getFunction(c->getSystemState(),_setProxyType),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(c->getSystemState(),_getURI),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",c->getSystemState()->getBuiltinFunction(_getObjectEncoding),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",c->getSystemState()->getBuiltinFunction(_setObjectEncoding),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("protocol","",c->getSystemState()->getBuiltinFunction(_getProtocol),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("proxyType","",c->getSystemState()->getBuiltinFunction(_getProxyType),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("proxyType","",c->getSystemState()->getBuiltinFunction(_setProxyType),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("uri","",c->getSystemState()->getBuiltinFunction(_getURI),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(close),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c,client);
 	REGISTER_GETTER_SETTER(c,maxPeerConnections);
 	REGISTER_GETTER(c,nearID);
 }
 
-void NetConnection::buildTraits(ASObject* o)
-{
-}
 
 void NetConnection::finalize()
 {
@@ -1084,6 +1124,8 @@ void NetConnection::jobFence()
 
 ASFUNCTIONBODY_ATOM(NetConnection,connect)
 {
+	if (!asAtomHandler::is<NetConnection>(obj))
+		return;
 	NetConnection* th=asAtomHandler::as<NetConnection>(obj);
 	//This takes 1 required parameter and an unspecified number of optional parameters
 	assert_and_throw(argslen>0);
@@ -1350,24 +1392,24 @@ void NetStream::sinit(Class_base* c)
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setVariableAtomByQName("CONNECT_TO_FMS",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"connectToFMS"),DECLARED_TRAIT);
 	c->setVariableAtomByQName("DIRECT_CONNECTIONS",nsNameAndKind(),asAtomHandler::fromString(c->getSystemState(),"directConnections"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(c->getSystemState(),play),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("play2","",Class<IFunction>::getFunction(c->getSystemState(),play2),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("resume","",Class<IFunction>::getFunction(c->getSystemState(),resume),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("pause","",Class<IFunction>::getFunction(c->getSystemState(),pause),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("togglePause","",Class<IFunction>::getFunction(c->getSystemState(),togglePause),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("seek","",Class<IFunction>::getFunction(c->getSystemState(),seek),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("bytesLoaded","",Class<IFunction>::getFunction(c->getSystemState(),_getBytesLoaded),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("bytesTotal","",Class<IFunction>::getFunction(c->getSystemState(),_getBytesTotal),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("time","",Class<IFunction>::getFunction(c->getSystemState(),_getTime),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("currentFPS","",Class<IFunction>::getFunction(c->getSystemState(),_getCurrentFPS),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("client","",Class<IFunction>::getFunction(c->getSystemState(),_getClient),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("client","",Class<IFunction>::getFunction(c->getSystemState(),_setClient),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(c->getSystemState(),_getCheckPolicyFile),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(c->getSystemState(),_setCheckPolicyFile),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("attach","",Class<IFunction>::getFunction(c->getSystemState(),attach),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("appendBytes","",Class<IFunction>::getFunction(c->getSystemState(),appendBytes),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("appendBytesAction","",Class<IFunction>::getFunction(c->getSystemState(),appendBytesAction),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("play","",c->getSystemState()->getBuiltinFunction(play),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("play2","",c->getSystemState()->getBuiltinFunction(play2),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("resume","",c->getSystemState()->getBuiltinFunction(resume),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("pause","",c->getSystemState()->getBuiltinFunction(pause),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("togglePause","",c->getSystemState()->getBuiltinFunction(togglePause),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",c->getSystemState()->getBuiltinFunction(close),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("seek","",c->getSystemState()->getBuiltinFunction(seek),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("bytesLoaded","",c->getSystemState()->getBuiltinFunction(_getBytesLoaded),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("bytesTotal","",c->getSystemState()->getBuiltinFunction(_getBytesTotal),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("time","",c->getSystemState()->getBuiltinFunction(_getTime),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("currentFPS","",c->getSystemState()->getBuiltinFunction(_getCurrentFPS),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("client","",c->getSystemState()->getBuiltinFunction(_getClient),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("client","",c->getSystemState()->getBuiltinFunction(_setClient),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("checkPolicyFile","",c->getSystemState()->getBuiltinFunction(_getCheckPolicyFile),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("checkPolicyFile","",c->getSystemState()->getBuiltinFunction(_setCheckPolicyFile),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("attach","",c->getSystemState()->getBuiltinFunction(attach),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("appendBytes","",c->getSystemState()->getBuiltinFunction(appendBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("appendBytesAction","",c->getSystemState()->getBuiltinFunction(appendBytesAction),NORMAL_METHOD,true);
 	REGISTER_GETTER(c, backBufferLength);
 	REGISTER_GETTER_SETTER(c, backBufferTime);
 	REGISTER_GETTER(c, bufferLength);
@@ -1376,8 +1418,8 @@ void NetStream::sinit(Class_base* c)
 	REGISTER_GETTER_SETTER(c, maxPauseBufferTime);
 	REGISTER_GETTER_SETTER(c,soundTransform);
 	REGISTER_GETTER_SETTER(c,useHardwareDecoder);
-	c->setDeclaredMethodByQName("info","",Class<IFunction>::getFunction(c->getSystemState(),_getInfo),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("publish","",Class<IFunction>::getFunction(c->getSystemState(),publish),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("info","",c->getSystemState()->getBuiltinFunction(_getInfo),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("publish","",c->getSystemState()->getBuiltinFunction(publish),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY_GETTER(NetStream, backBufferLength)
@@ -1401,7 +1443,7 @@ ASFUNCTIONBODY_ATOM(NetStream,_getInfo)
 	if (th->datagenerationfile)
 	{
 		int curbps = 0;
-		uint64_t cur=compat_msectiming();
+		uint64_t cur=wrk->getSystemState()->getCurrentTime_ms();
 		th->countermutex.lock();
 		while (th->currentBytesPerSecond.size() > 0 && (cur - th->currentBytesPerSecond.front().timestamp > 1000))
 		{
@@ -1488,7 +1530,7 @@ ASFUNCTIONBODY_ATOM(NetStream,_constructor)
 	tiny_string value;
 	_NR<NetConnection> netConnection;
 
-	if (wrk->rootClip->usesActionScript3)
+	if (wrk->needsActionScript3())
 	{
 		ARG_CHECK(ARG_UNPACK(netConnection)(value, "connectToFMS"));
 	}
@@ -1505,7 +1547,6 @@ ASFUNCTIONBODY_ATOM(NetStream,_constructor)
 	th->incRef();
 	if (netConnection.isNull())
 		netConnection = _MR(Class<NetConnection>::getInstanceSNoArgs(wrk));
-	netConnection->incRef();
 	th->connection=netConnection;
 	th->client = _NR<ASObject>(th);
 }
@@ -1846,7 +1887,7 @@ ASFUNCTIONBODY_ATOM(NetStream,appendBytes)
 					th->datagenerationbuffer->removeFrontBytes(processedlength);
 				else
 					th->datagenerationbuffer->setLength(0);
-				uint64_t cur=compat_msectiming();
+				uint64_t cur=wrk->getSystemState()->getCurrentTime_ms();
 				struct bytespertime b;
 				b.timestamp = cur;
 				b.bytesread = processedlength;
@@ -1917,7 +1958,7 @@ void NetStream::tick()
 		//TODO: use soundTransform->pan
 		if(soundTransform && soundTransform->volume != oldVolume)
 		{
-			audioStream->setVolume(soundTransform->volume);
+			audioStream->setVolume(number_t(soundTransform->volume)/100.0);
 			oldVolume = soundTransform->volume;
 		}
 	}
@@ -1954,8 +1995,11 @@ void NetStream::tick()
 	{
 		videoDecoder->skipUntil(streamTime);
 		//The next line ensures that the downloader will not be destroyed before the upload jobs are fenced
-		videoDecoder->waitForFencing();
-		getSys()->getRenderThread()->addUploadJob(videoDecoder);
+		if (!videoDecoder->getQueued())
+		{
+			videoDecoder->waitForFencing();
+			getSys()->getRenderThread()->addUploadJob(videoDecoder);
+		}
 	}
 }
 
@@ -2124,8 +2168,8 @@ void NetStream::execute()
 			if(audioDecoder==nullptr && streamDecoder->audioDecoder)
 				audioDecoder=streamDecoder->audioDecoder;
 			
-			if(audioStream==nullptr && audioDecoder && audioDecoder->isValid())
-				audioStream=getSys()->audioManager->createStream(audioDecoder,streamDecoder->hasVideo(),this,-1,0,soundTransform ? soundTransform->volume : 1.0);
+			if(audioStream==nullptr && audioDecoder && audioDecoder->isValid() && getSys()->audioManager)
+				audioStream=getSystemState()->audioManager->createStream(audioDecoder,streamDecoder->hasVideo(),this,-1,0,soundTransform ? number_t(soundTransform->volume)/100.0 : 1.0);
 			if(!tickStarted && isReady() && frameRate && ((framesdecoded / frameRate) >= this->bufferTime))
 			{
 				tickStarted=true;
@@ -2160,6 +2204,7 @@ void NetStream::execute()
 	catch(JobTerminationException& e)
 	{
 		LOG(LOG_ERROR, "JobTerminationException in NetStream ");
+		threadAbort();
 		waitForFlush=false;
 	}
 	catch(exception& e)
@@ -2250,10 +2295,10 @@ void NetStream::sendClientNotification(const tiny_string& name, std::list<asAtom
 	if(asAtomHandler::isFunction(callback))
 	{
 		asAtom callbackArgs[arglist.size()];
-
-		ASObject* closure = client.getPtr();
-		if (asAtomHandler::getClosure(callback))
-			closure = asAtomHandler::getClosure(callback);
+		
+		ASObject* closure = asAtomHandler::getObject(asAtomHandler::getClosureAtom(callback,asAtomHandler::invalidAtom));
+		if (!closure)
+			closure = client.getPtr();
 		closure->incRef();
 		int i= 0;
 		for (auto it = arglist.cbegin();it != arglist.cend(); it++)
@@ -2324,7 +2369,7 @@ double NetStream::getFrameRate()
 	return frameRate;
 }
 
-const TextureChunk& NetStream::getTexture() const
+TextureChunk& NetStream::getTexture() const
 {
 	assert(isReady());
 	return videoDecoder->getTexture();
@@ -2445,15 +2490,11 @@ void URLVariables::decode(const tiny_string& s)
 void URLVariables::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_DYNAMIC_NOT_FINAL);
-	c->setDeclaredMethodByQName("decode","",Class<IFunction>::getFunction(c->getSystemState(),decode),NORMAL_METHOD,true);
-	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(c->getSystemState(),_toString),DYNAMIC_TRAIT);
+	c->setDeclaredMethodByQName("decode","",c->getSystemState()->getBuiltinFunction(decode),NORMAL_METHOD,true);
+	c->prototype->setVariableByQName("toString","",c->getSystemState()->getBuiltinFunction(_toString),DYNAMIC_TRAIT);
 }
 
-void URLVariables::buildTraits(ASObject* o)
-{
-}
-
-URLVariables::URLVariables(ASWorker* wrk, Class_base* c, const tiny_string& s):ASObject(wrk,c)
+URLVariables::URLVariables(ASWorker* wrk, Class_base* c, const tiny_string& s):ASObject(wrk,c,T_OBJECT,SUBTYPE_URLVARIABLES)
 {
 	decode(s);
 }
@@ -2533,6 +2574,7 @@ tiny_string URLVariables::toString_priv()
 			tmp+=escapedValue;
 			g_free(escapedValue);
 		}
+		ASATOM_DECREF(val);
 	}
 	return tmp;
 }
@@ -2617,7 +2659,7 @@ ASFUNCTIONBODY_ATOM(lightspark,navigateToURL)
 void Responder::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("onResult","",Class<IFunction>::getFunction(c->getSystemState(),onResult),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("onResult","",c->getSystemState()->getBuiltinFunction(onResult),NORMAL_METHOD,true);
 }
 
 void Responder::finalize()
@@ -2650,69 +2692,6 @@ ASFUNCTIONBODY_ATOM(Responder, onResult)
 	ASATOM_DECREF(ret);
 }
 
-LocalConnection::LocalConnection(ASWorker* wrk, Class_base* c):
-	EventDispatcher(wrk,c),isSupported(false),client(NULL)
-{
-}
-
-void LocalConnection::sinit(Class_base* c)
-{
-	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
-	c->setDeclaredMethodByQName("allowDomain","",Class<IFunction>::getFunction(c->getSystemState(),allowDomain),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("allowInsecureDomain","",Class<IFunction>::getFunction(c->getSystemState(),allowInsecureDomain),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("send","",Class<IFunction>::getFunction(c->getSystemState(),send),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(c->getSystemState(),connect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(c->getSystemState(),close),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("domain","",Class<IFunction>::getFunction(c->getSystemState(),domain),GETTER_METHOD,true);
-	REGISTER_GETTER(c,isSupported);
-	REGISTER_GETTER_SETTER(c,client);
-}
-ASFUNCTIONBODY_GETTER(LocalConnection, isSupported)
-ASFUNCTIONBODY_GETTER_SETTER(LocalConnection, client)
-
-ASFUNCTIONBODY_ATOM(LocalConnection,_constructor)
-{
-	EventDispatcher::_constructor(ret,wrk,obj, nullptr, 0);
-	LocalConnection* th=Class<LocalConnection>::cast(asAtomHandler::getObject(obj));
-	th->incRef();
-	th->client = _NR<LocalConnection>(th);
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection is not implemented");
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, domain)
-{
-	tiny_string res = wrk->getSystemState()->mainClip->getOrigin().getHostname();
-	if (wrk->getSystemState()->flashMode == SystemState::AIR)
-		LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::domain is not implemented for AIR mode");
-	
-	if (res.empty())
-		res = "localhost";
-	ret = asAtomHandler::fromString(wrk->getSystemState(),res);
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, allowDomain)
-{
-	//LocalConnection* th=obj.as<LocalConnection>();
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::allowDomain is not implemented");
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, allowInsecureDomain)
-{
-	//LocalConnection* th=obj.as<LocalConnection>();
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::allowInsecureDomain is not implemented");
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, send)
-{
-	//LocalConnection* th=obj.as<LocalConnection>();
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::send is not implemented");
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, connect)
-{
-	//LocalConnection* th=obj.as<LocalConnection>();
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::connect is not implemented");
-}
-ASFUNCTIONBODY_ATOM(LocalConnection, close)
-{
-	//LocalConnection* th=obj.as<LocalConnection>();
-	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::close is not implemented");
-}
 
 NetGroup::NetGroup(ASWorker* wrk, Class_base* c):
 	EventDispatcher(wrk,c)
@@ -2741,8 +2720,10 @@ void FileReference::sinit(Class_base* c)
 {
 	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	REGISTER_GETTER_RESULTTYPE(c,size,Number);
+	REGISTER_GETTER_RESULTTYPE(c,name,ASString);
 }
 ASFUNCTIONBODY_GETTER(FileReference, size)
+ASFUNCTIONBODY_GETTER(FileReference, name)
 
 ASFUNCTIONBODY_ATOM(FileReference,_constructor)
 {
@@ -2791,17 +2772,17 @@ ASFUNCTIONBODY_ATOM(lightspark,registerClassAlias)
 	const tiny_string& arg0 = asAtomHandler::toString(args[0],wrk);
 	ASATOM_INCREF(args[1]);
 	_R<Class_base> c=_MR(asAtomHandler::as<Class_base>(args[1]));
-	RootMovieClip* root = wrk->rootClip.getPtr();
-	root->aliasMap.insert(make_pair(arg0, c));
+	ApplicationDomain* appdomain = wrk->rootClip->applicationDomain.getPtr();
+	appdomain->aliasMap.insert(make_pair(arg0, c));
 }
 
 ASFUNCTIONBODY_ATOM(lightspark,getClassByAlias)
 {
 	assert_and_throw(argslen==1 && asAtomHandler::isString(args[0]));
 	const tiny_string& arg0 = asAtomHandler::toString(args[0],wrk);
-	RootMovieClip* root = wrk->rootClip.getPtr();
-	auto it=root->aliasMap.find(arg0);
-	if(it==root->aliasMap.end())
+	ApplicationDomain* appdomain = wrk->rootClip->applicationDomain.getPtr();
+	auto it=appdomain->aliasMap.find(arg0);
+	if(it==appdomain->aliasMap.end())
 	{
 		createError<ReferenceError>(wrk,kClassNotFoundError, arg0);
 		return;
